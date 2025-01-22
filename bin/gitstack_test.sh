@@ -55,6 +55,16 @@ if [ "$(current_branch)" != "foo-2" ]; then
 fi
 echo "✅ Successfully incremented to 'foo-2'"
 
+echo "Deleting stack with 'git stack delete -f foo'"
+git stack delete -f foo
+
+# Verify no foo-* branches remain
+if git rev-parse --verify foo-0 &>/dev/null || \
+   git rev-parse --verify foo-1 &>/dev/null || \
+   git rev-parse --verify foo-2 &>/dev/null; then
+  fail "Expected no foo-* branches to exist after delete -f foo"
+fi
+echo "✅ Successfully deleted all foo-* branches"
 
 echo
 echo "🎉 All tests passed!"
