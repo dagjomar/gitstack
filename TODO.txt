@@ -1,0 +1,64 @@
+# Git Stack - Improvement Ideas
+
+## Interactive Features
+- Add `git stack list` command with fzf-based visual selection
+- Show branch details and commit messages in preview window
+- Interactive stack visualization
+- Fuzzy search through stacks and branches
+
+## Smart Detection & Context
+- Auto-detect when current branch is part of a stack
+- Suggest relevant actions based on context
+- Show visual representation of current stack structure
+- Detect and warn about potential stack issues
+
+## Stack Status & Overview
+- Add `git stack status` command showing:
+  - Current active stack
+  - All branches in the stack with latest commits
+  - Remote sync status for each branch
+  - Conflict detection between stack branches
+  - Stack depth and health metrics
+
+## Advanced Stack Operations
+- `git stack rebase` - Rebase entire stack onto main
+- `git stack squash` - Combine all commits in a stack
+- `git stack push` - Push all stack branches in order
+- `git stack clean` - Remove merged branches from stack
+- Undo/redo support for stack operations
+
+## Documentation Improvements
+- Rewrite README with clear use-cases
+- Add visual examples of stack workflows
+- Document common patterns and best practices
+- Add troubleshooting section
+- Include real-world examples
+- Add architecture documentation
+
+## Configuration & Customization
+- Customizable branch naming patterns
+- Configurable default base branch
+- Maximum stack depth settings
+- Branch name templates
+- Custom stack naming conventions
+
+## CI/CD Integration
+- GitHub/GitLab PR creation for stack branches
+- Auto-update PR descriptions with stack info
+- Stack visualization in PR comments
+- CI pipeline integration
+- Automated stack health checks
+
+## Safety Features
+- Prevent accidental deletion of unpushed branches
+- Warn about unmerged changes
+- Backup option before destructive operations
+- Stack state validation
+- Conflict prevention mechanisms
+
+## Future Ideas
+- Visual stack representation in terminal
+- Stack metrics and analytics
+- Multi-remote support
+- Stack sharing and collaboration features
+- Integration with code review tools 
