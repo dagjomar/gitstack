@@ -77,6 +77,10 @@ Alternatively, to interactively delete the current branch's stack:
 
 This command prompts for confirmation before deleting the stack.
 
+## TODOs
+- Create better usage examples and use cases explaining how to best us it in a normal workflow
+- Create command to manage rebasing
+
 ## Contributing
 
 Contributions are welcome! Feel free to submit issues or pull requests to enhance Git Stack.
