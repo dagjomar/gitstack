@@ -1,6 +1,9 @@
 # Git Stack
+## A lightweight command-line tool for effortless Git branch stack management.
 
-A lightweight command-line tool for effortless Git branch stack management.
+<img src="./docs/gitstack.jpeg" alt="Git Stack Illustration" width="500"/>
+
+<br />
 
 ## Overview
 
