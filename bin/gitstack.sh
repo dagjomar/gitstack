@@ -64,7 +64,7 @@ get_stack_info() {
   local current_branch
   current_branch=$(git rev-parse --abbrev-ref HEAD)
   
-  if [[ $current_branch =~ ^([^0-9]+)-([0-9]+)$ ]]; then
+  if [[ $current_branch =~ ^(.+)-([0-9]+)$ ]]; then
     STACK_BASE="${BASH_REMATCH[1]}"
     STACK_NUM="${BASH_REMATCH[2]}"
     return 0  # Success
@@ -79,7 +79,7 @@ get_stack_info() {
 # Usage: get_stack_branches "base-name"
 get_stack_branches() {
   local base_name="$1"
-  git branch --list "${base_name}-*" | sed 's/^[* ]*//'
+  git branch --list "${base_name}-[0-9]*" | sed 's/^[* ]*//'
 }
 
 # Modify increment_stack to use the new function
