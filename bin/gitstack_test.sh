@@ -145,6 +145,200 @@ function test_list_stacks() {
   git branch -D feature-0 feature-1 bugfix-0 bugfix-1 other-branch 2>/dev/null || true
 }
 
+# Test stack health check functionality
+function test_stack_health() {
+  echo "Testing stack health check..."
+
+  # Create a healthy stack first
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" create test-stack
+  echo "test1" > test1.txt
+  git add test1.txt
+  git commit -m "test1"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test2" > test2.txt
+  git add test2.txt
+  git commit -m "test2"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test3" > test3.txt
+  git add test3.txt
+  git commit -m "test3"
+
+  # Test healthy stack
+  local status
+  status=$(get_stack_health_status "test-stack")
+  assert_equals "healthy" "$status" "Stack should be healthy initially"
+
+  # Make stack unhealthy by modifying the same file and amending
+  git checkout test-stack-1
+  git reset --hard main
+  
+  # Test unhealthy stack
+  status=$(get_stack_health_status "test-stack")
+  assert_equals "needs rebase" "$status" "Stack should need rebase after breaking chain"
+
+  # Clean up
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f test-stack
+  rm -f test1.txt test2.txt test3.txt
+}
+
+# Add new assertion helper
+function assert_not_contains() {
+  local haystack="$1"
+  local needle="$2"
+  local message="$3"
+  
+  if echo "$haystack" | grep -q "$needle"; then
+    echo "❌ $message"
+    echo "  Expected NOT to find: '$needle'"
+    echo "  In:                  '$haystack'"
+    exit 1
+  else
+    echo "✅ $message"
+  fi
+}
+
+# Test status command functionality
+function test_status_command() {
+  echo "Testing status command..."
+
+  # Create multiple stacks first
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" create test-status-a
+  echo "test1" > test1.txt
+  git add test1.txt
+  git commit -m "test1"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test2" > test2.txt
+  git add test2.txt
+  git commit -m "test2"
+
+  # Create another stack
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" create test-status-b
+  echo "test3" > test3.txt
+  git add test3.txt
+  git commit -m "test3"
+
+  # Test status with no arguments (all stacks)
+  local status_output
+  status_output=$("$SCRIPT_DIR/gitstack.sh" status)
+  assert_contains "$status_output" "Stack: test-status-a" "Status should show first stack"
+  assert_contains "$status_output" "Stack: test-status-b" "Status should show second stack"
+  assert_contains "$status_output" "test-status-a-0" "Status should list first stack's branches"
+  assert_contains "$status_output" "test-status-b-0" "Status should list second stack's branches"
+
+  # Test status with explicit stack name
+  status_output=$("$SCRIPT_DIR/gitstack.sh" status test-status-a)
+  assert_contains "$status_output" "Stack: test-status-a" "Status with arg should show stack name"
+  assert_not_contains "$status_output" "Stack: test-status-b" "Status with arg should not show other stacks"
+
+  # Make first stack unhealthy
+  git checkout test-status-a-1
+  git reset --hard main
+  
+  # Test status shows unhealthy state for specific stack
+  status_output=$("$SCRIPT_DIR/gitstack.sh" status test-status-a)
+  assert_contains "$status_output" "needs rebase" "Status should show unhealthy stack"
+
+  # Test status shows both healthy and unhealthy stacks
+  status_output=$("$SCRIPT_DIR/gitstack.sh" status)
+  assert_contains "$status_output" "needs rebase" "Status should show unhealthy stack"
+  assert_contains "$status_output" "Stack is healthy" "Status should show healthy stack"
+
+  # Clean up
+  git checkout main 2>/dev/null || git checkout master 2>/dev/null
+  "$SCRIPT_DIR/gitstack.sh" delete -f test-status-a
+  "$SCRIPT_DIR/gitstack.sh" delete -f test-status-b
+  rm -f test1.txt test2.txt test3.txt
+  echo "✅ Status command tests passed"
+}
+
+# Test helper functions
+function assert_equals() {
+  local expected="$1"
+  local actual="$2"
+  local message="$3"
+  
+  if [ "$expected" = "$actual" ]; then
+    echo "✅ $message"
+  else
+    echo "❌ $message"
+    echo "  Expected: '$expected'"
+    echo "  Got:      '$actual'"
+    exit 1
+  fi
+}
+
+function assert_contains() {
+  local haystack="$1"
+  local needle="$2"
+  local message="$3"
+  
+  if echo "$haystack" | grep -q "$needle"; then
+    echo "✅ $message"
+  else
+    echo "❌ $message"
+    echo "  Expected to find: '$needle'"
+    echo "  In:              '$haystack'"
+    exit 1
+  fi
+}
+
+# Test fix command functionality
+function test_fix_command() {
+  echo "Testing fix command..."
+
+  # Create a healthy stack first
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" create test-fix
+  echo "test1" > test1.txt
+  git add test1.txt
+  git commit -m "test1"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test2" > test2.txt
+  git add test2.txt
+  git commit -m "test2"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test3" > test3.txt
+  git add test3.txt
+  git commit -m "test3"
+
+  # Test healthy stack
+  local status
+  status=$(get_stack_health_status "test-fix")
+  assert_equals "healthy" "$status" "Stack should be healthy initially"
+
+  # Make stack unhealthy by resetting middle branch to main
+  git checkout test-fix-1
+  git reset --hard main
+  
+  # Test unhealthy stack
+  status=$(get_stack_health_status "test-fix")
+  assert_equals "needs rebase" "$status" "Stack should need rebase after breaking chain"
+
+  # Try to fix the stack
+  if ! "$SCRIPT_DIR/gitstack.sh" fix test-fix; then
+    fail "Fix command failed"
+  fi
+
+  # Verify stack is healthy again
+  status=$(get_stack_health_status "test-fix")
+  assert_equals "healthy" "$status" "Stack should be healthy after fix"
+
+  # Clean up
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f test-fix
+  rm -f test1.txt test2.txt test3.txt
+  echo "✅ Fix command tests passed"
+}
+
 # Get the absolute path of the script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -172,6 +366,9 @@ source "$SCRIPT_DIR/gitstack.sh"
 test_get_stack_info
 test_get_stack_branches
 test_list_stacks
+test_stack_health
+test_status_command
+test_fix_command
 
 # Optional: Clean up any existing test branches from previous runs
 git branch -D foo-0 foo-1 foo-2 2>/dev/null || true
