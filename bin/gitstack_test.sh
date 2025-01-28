@@ -109,6 +109,42 @@ function test_get_stack_branches() {
   git branch -D bar-1 bar-2 bar-3 other-1 2>/dev/null || true
 }
 
+# Test list_stacks functionality
+function test_list_stacks() {
+  echo "Testing list_stacks..."
+  
+  # Create some test stacks
+  git checkout -b feature-0 2>/dev/null
+  git checkout -b feature-1 2>/dev/null
+  git checkout -b bugfix-0 2>/dev/null
+  git checkout -b bugfix-1 2>/dev/null
+  git checkout -b other-branch 2>/dev/null
+  echo "Created test branches"
+  
+  # Get all stack bases
+  local stack_bases
+  stack_bases=$(git branch --format='%(refname:short)' | grep -E '^.+-[0-9]+$' | sed -E 's/-[0-9]+$//' | sort -u)
+  
+  # Check that we found both stacks
+  if echo "$stack_bases" | grep -q "feature" && \
+     echo "$stack_bases" | grep -q "bugfix"; then
+    echo "✅ list_stacks found all stack bases"
+  else
+    fail "list_stacks missing some stack bases"
+  fi
+  
+  # Check that non-stack branch is not included
+  if echo "$stack_bases" | grep -q "other-branch"; then
+    fail "list_stacks incorrectly included non-stack branch"
+  else
+    echo "✅ list_stacks correctly excluded non-stack branch"
+  fi
+  
+  # Cleanup test branches
+  git checkout main 2>/dev/null || git checkout master 2>/dev/null
+  git branch -D feature-0 feature-1 bugfix-0 bugfix-1 other-branch 2>/dev/null || true
+}
+
 # Get the absolute path of the script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -135,6 +171,7 @@ source "$SCRIPT_DIR/gitstack.sh"
 # Run new tests first
 test_get_stack_info
 test_get_stack_branches
+test_list_stacks
 
 # Optional: Clean up any existing test branches from previous runs
 git branch -D foo-0 foo-1 foo-2 2>/dev/null || true

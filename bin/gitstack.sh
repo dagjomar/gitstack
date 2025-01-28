@@ -7,12 +7,14 @@
 #   gitstack.sh increment
 #   gitstack.sh delete -f <base_name>
 #   gitstack.sh delete          # <-- new shorthand: prompt to delete current branch's stack
+#   gitstack.sh list           # <-- interactive stack browser with preview
 #
 # Description:
 #   create      -> Creates a new branch named "<base_name>-0".
 #   increment   -> Increments the current branch suffix if on "<base>-<num>".
 #   delete -f   -> Force-deletes ALL local branches named "<base_name>-<num>" (checking out main or master first).
 #   delete      -> Looks at the current branch to determine the stack <base>, prompts to confirm, then force-deletes.
+#   list        -> Interactive browser for stacks with branch details preview.
 # -----------------------------------------------------------------------------
 
 function usage() {
@@ -23,12 +25,14 @@ function usage() {
   echo "  $0 increment"
   echo "  $0 delete -f <base_name>"
   echo "  $0 delete                (Interactively delete the current stack if on <base>-<num>)"
+  echo "  $0 list                  (Interactive stack browser with branch preview)"
   echo
   echo "Commands:"
   echo "  create      Creates a new branch named '<base_name>-0'."
   echo "  increment   Increments the current branch suffix if it matches '<base>-<num>'."
   echo "  delete -f   Force-deletes ALL local branches matching '<base_name>-*'."
   echo "  delete      If on '<base_name>-<num>', prompts to confirm and force-deletes that entire stack."
+  echo "  list        Interactive browser for stacks with branch details preview."
   exit 1
 }
 
@@ -200,6 +204,76 @@ function delete_shorthand() {
   esac
 }
 
+# Lists all stacks with an interactive selector
+# Shows branch details in the preview window
+function list_stacks() {
+  # Check for fzf
+  if ! command -v fzf >/dev/null 2>&1; then
+    echo "Error: This feature requires 'fzf' to be installed."
+    echo
+    echo "To install fzf:"
+    echo "  Homebrew (macOS): brew install fzf"
+    echo "  Ubuntu/Debian:   sudo apt-get install fzf"
+    echo "  Other:          Visit https://github.com/junegunn/fzf#installation"
+    exit 1
+  fi
+
+  # Get all branches that match our stack pattern
+  local all_branches
+  all_branches=$(git branch --format='%(refname:short)' | grep -E '^.+-[0-9]+$' || true)
+  
+  if [ -z "$all_branches" ]; then
+    echo "No stack branches found."
+    exit 0
+  fi
+
+  # Extract unique stack base names
+  local stack_bases
+  stack_bases=$(echo "$all_branches" | sed -E 's/-[0-9]+$//' | sort -u)
+
+  # Create a temporary preview script
+  local preview_script
+  preview_script=$(mktemp)
+  cat > "$preview_script" << 'EOF'
+#!/bin/bash
+base_name="$1"
+echo -e "\033[1;34mStack: $base_name\033[0m\n"
+git branch --list "$base_name-[0-9]*" --format="%(refname:short)" | while read -r branch; do
+  if [ "$branch" = "$(git rev-parse --abbrev-ref HEAD)" ]; then
+    echo -e "\033[32m* $branch\033[0m"
+  else
+    echo -e "\033[32m  $branch\033[0m"
+  fi
+  git log -1 --color=always --format="    %h %s (%cr) <%an>" "$branch"
+  echo
+done
+EOF
+  chmod +x "$preview_script"
+
+  # Use fzf to select a stack
+  local selected_stack
+  selected_stack=$(echo "$stack_bases" | \
+    fzf --ansi \
+        --no-mouse \
+        --preview "$preview_script {}" \
+        --preview-window=right:65% \
+        --bind 'ctrl-p:toggle-preview' \
+        --header "Stack Branches (CTRL-P: toggle preview, Enter: checkout latest)")
+
+  # Clean up
+  rm -f "$preview_script"
+
+  # If a stack was selected, checkout the highest numbered branch
+  if [ -n "$selected_stack" ]; then
+    local latest_branch
+    latest_branch=$(git branch --list "${selected_stack}-[0-9]*" --format="%(refname:short)" | sort -V | tail -n1)
+    if [ -n "$latest_branch" ]; then
+      echo "Checking out latest branch in stack: $latest_branch"
+      git checkout "$latest_branch"
+    fi
+  fi
+}
+
 # Only process arguments if script is run directly (not sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   subcommand="$1"
@@ -220,6 +294,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       else
         delete_stack "$@"
       fi
+      ;;
+    list)
+      list_stacks
       ;;
     *)
       usage
