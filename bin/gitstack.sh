@@ -61,41 +61,41 @@ function create_branch() {
   echo "Branch '$new_branch' successfully created and checked out."
 }
 
-# Increment the current branch suffix: "<base>-<num>" -> "<base>-<num+1>"
-function increment_branch() {
-  local current_branch
-  current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-
-  if [ -z "$current_branch" ] || [ "$current_branch" == "HEAD" ]; then
-    echo "Error: You are not on a valid branch (detached HEAD?)."
-    exit 1
-  fi
-
-  if [[ "$current_branch" =~ ^(.+)-([0-9]+)$ ]]; then
-    local base="${BASH_REMATCH[1]}"
-    local number="${BASH_REMATCH[2]}"
-    local new_number=$((number + 1))
-    local new_branch="${base}-${new_number}"
-
-    # Check if new branch already exists
-    if git rev-parse --verify "$new_branch" &>/dev/null; then
-      echo "Error: Branch '$new_branch' already exists. Aborting."
-      exit 1
+# Returns the base name and number of the current branch if it's part of a stack
+# Usage: if get_stack_info; then echo "Base: $STACK_BASE, Number: $STACK_NUM"; fi
+get_stack_info() {
+    local current_branch
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    
+    if [[ $current_branch =~ ^([^0-9]+)-([0-9]+)$ ]]; then
+        STACK_BASE="${BASH_REMATCH[1]}"
+        STACK_NUM="${BASH_REMATCH[2]}"
+        return 0  # Success
+    else
+        STACK_BASE=""
+        STACK_NUM=""
+        return 1  # Not a stack branch
     fi
+}
 
-    echo "Current branch: $current_branch"
-    echo "Incrementing to: $new_branch"
+# Gets all branches belonging to a stack
+# Usage: get_stack_branches "base-name"
+get_stack_branches() {
+    local base_name="$1"
+    git branch --list "${base_name}-*" | sed 's/^[* ]*//'
+}
 
-    if ! git checkout -b "$new_branch"; then
-      echo "Error: Failed to create branch '$new_branch'."
-      exit 1
+# Modify increment_stack to use the new function
+increment_stack() {
+    if get_stack_info; then
+        local new_num=$((STACK_NUM + 1))
+        local new_branch="${STACK_BASE}-${new_num}"
+        git checkout -b "$new_branch"
+        echo "Branch '$new_branch' successfully created and checked out."
+    else
+        echo "Error: Current branch is not part of a stack (should match '<base>-<number>' pattern)."
+        exit 1
     fi
-
-    echo "Branch '$new_branch' successfully created and checked out."
-  else
-    echo "Error: Current branch '$current_branch' does not match '<base>-<number>' pattern."
-    exit 1
-  fi
 }
 
 # Force-delete all local branches in the stack "<base_name>-*"
@@ -112,13 +112,18 @@ function delete_stack() {
   fi
 
   if [ -z "$base_name" ]; then
-    echo "Error: Missing <base_name> for 'delete'."
-    usage
+    # Try to get base name from current branch if none provided
+    if get_stack_info; then
+      base_name="$STACK_BASE"
+    else
+      echo "Error: Missing <base_name> for 'delete' and not currently on a stack branch."
+      usage
+    fi
   fi
 
   # Find all matching branches of the form "<base_name>-*"
   local matching_branches
-  matching_branches=$(git branch --list "${base_name}-*" | sed 's/^[* ]*//')
+  matching_branches=$(get_stack_branches "$base_name")
 
   if [ -z "$matching_branches" ]; then
     echo "No branches found matching '${base_name}-*'. Nothing to delete."
@@ -204,7 +209,7 @@ case "$subcommand" in
     create_branch "$@"
     ;;
   increment)
-    increment_branch
+    increment_stack
     ;;
   delete)
     # If no args, do interactive shorthand; otherwise do standard logic
