@@ -8,6 +8,8 @@
 #   gitstack.sh delete -f <base_name>
 #   gitstack.sh delete          # <-- new shorthand: prompt to delete current branch's stack
 #   gitstack.sh list           # <-- interactive stack browser with preview
+#   gitstack.sh status [stack] # <-- show health status of specified stack or all stacks
+#   gitstack.sh fix [stack]    # <-- fix an unhealthy stack by rebasing divergent branches
 #
 # Description:
 #   create      -> Creates a new branch named "<base_name>-0".
@@ -15,6 +17,8 @@
 #   delete -f   -> Force-deletes ALL local branches named "<base_name>-<num>" (checking out main or master first).
 #   delete      -> Looks at the current branch to determine the stack <base>, prompts to confirm, then force-deletes.
 #   list        -> Interactive browser for stacks with branch details preview.
+#   status      -> Shows health status of all stacks (or specified stack if provided).
+#   fix         -> Fix an unhealthy stack by rebasing divergent branches.
 # -----------------------------------------------------------------------------
 
 function usage() {
@@ -26,6 +30,8 @@ function usage() {
   echo "  $0 delete -f <base_name>"
   echo "  $0 delete                (Interactively delete the current stack if on <base>-<num>)"
   echo "  $0 list                  (Interactive stack browser with branch preview)"
+  echo "  $0 status [stack]        (Show health status of specified stack or all stacks)"
+  echo "  $0 fix [stack]           (Fix an unhealthy stack by rebasing divergent branches)"
   echo
   echo "Commands:"
   echo "  create      Creates a new branch named '<base_name>-0'."
@@ -33,6 +39,8 @@ function usage() {
   echo "  delete -f   Force-deletes ALL local branches matching '<base_name>-*'."
   echo "  delete      If on '<base_name>-<num>', prompts to confirm and force-deletes that entire stack."
   echo "  list        Interactive browser for stacks with branch details preview."
+  echo "  status      Shows health status of all stacks (or specified stack if provided)."
+  echo "  fix         Fix an unhealthy stack by rebasing divergent branches."
   exit 1
 }
 
@@ -218,59 +226,496 @@ function list_stacks() {
     exit 1
   fi
 
+  # Create temp files with unique but consistent names for this session
+  local temp_dir="/tmp/gitstack_$$"
+  mkdir -p "$temp_dir"
+  local branch_list="$temp_dir/branches"
+  local preview_script="$temp_dir/preview"
+  local action_script="$temp_dir/action"
+
   # Get all branches that match our stack pattern
   local all_branches
   all_branches=$(git branch --format='%(refname:short)' | grep -E '^.+-[0-9]+$' || true)
   
   if [ -z "$all_branches" ]; then
+    rm -rf "$temp_dir"
     echo "No stack branches found."
     exit 0
   fi
 
-  # Extract unique stack base names
+  # Extract unique stack base names and add health status
   local stack_bases
-  stack_bases=$(echo "$all_branches" | sed -E 's/-[0-9]+$//' | sort -u)
+  stack_bases=$(echo "$all_branches" | sed -E 's/-[0-9]+$//' | sort -u | while read -r base; do
+    health_status=$(check_stack_health "$base" >/dev/null 2>&1 && echo "✅" || echo "⚠️ ")
+    echo "$base $health_status"
+  done)
 
   # Create a temporary preview script
-  local preview_script
-  preview_script=$(mktemp)
   cat > "$preview_script" << 'EOF'
 #!/bin/bash
-base_name="$1"
-echo -e "\033[1;34mStack: $base_name\033[0m\n"
-git branch --list "$base_name-[0-9]*" --format="%(refname:short)" | while read -r branch; do
-  if [ "$branch" = "$(git rev-parse --abbrev-ref HEAD)" ]; then
-    echo -e "\033[32m* $branch\033[0m"
-  else
-    echo -e "\033[32m  $branch\033[0m"
-  fi
-  git log -1 --color=always --format="    %h %s (%cr) <%an>" "$branch"
-  echo
-done
+input="$1"
+base_name="${input%% *}"  # Just take everything before the first space
+mode="${2:-normal}"  # Can be 'normal' or 'rebase'
+
+if [ "$mode" = "rebase" ]; then
+  echo -e "\033[1;34mRebase Options for Stack: $base_name\033[0m\n"
+  echo -e "\033[1;33mAvailable Actions:\033[0m"
+  echo -e "  \033[32m1\033[0m: Rebase branch stack (with update-refs)"
+  echo -e "\n\033[90mPress a number to select an action, or Escape to cancel\033[0m"
+else
+  echo -e "\033[1;34mStack: $base_name\033[0m\n"
+  echo -e "\033[1;33mBranch Actions:\033[0m"
+  echo -e "  \033[36mEnter\033[0m: Checkout selected branch"
+  echo -e "  \033[36mCtrl-D\033[0m: Delete selected branch"
+  echo -e "  \033[36mCtrl-R\033[0m: Show rebase options\n"
+  echo -e "\033[1;33mStack Branches:\033[0m"
+
+  # Get and display branches
+  while read -r branch; do
+    if [ "$branch" = "$(git rev-parse --abbrev-ref HEAD)" ]; then
+      echo -e "\033[32m→ $branch\033[0m"
+    else
+      echo -e "  $branch"
+    fi
+    git log -1 --color=always --format="    %h %s (%cr) <%an>" "$branch"
+    echo
+  done < <(git branch --list "$base_name-[0-9]*" --format="%(refname:short)" | sort -V)
+fi
 EOF
   chmod +x "$preview_script"
 
-  # Use fzf to select a stack
-  local selected_stack
-  selected_stack=$(echo "$stack_bases" | \
+  # Create a temporary rebase selector script
+  local rebase_selector="$temp_dir/rebase_selector"
+  cat > "$rebase_selector" << 'EOF'
+#!/bin/bash
+branch="$1"
+
+echo -e "\033[1;34mRebase Target: $branch\033[0m\n"
+echo -e "This will rebase the current branch and all its descendants onto \033[1;32m$branch\033[0m"
+echo -e "using git's update-refs feature to maintain the stack structure.\n"
+echo -e "\033[90mPress Enter to confirm, or Ctrl-C to cancel\033[0m"
+EOF
+  chmod +x "$rebase_selector"
+
+  # Create a temporary branch selector script
+  local branch_selector="$temp_dir/branch_selector"
+  cat > "$branch_selector" << EOF
+#!/bin/bash
+branch="$1"
+base_name="${1%-[0-9]*}"  # Extract base name from branch
+
+echo -e "\033[1;34m$branch\033[0m"
+git log -1 --color=always --format="    %h %s (%cr) <%an>" "$branch"
+echo
+EOF
+  chmod +x "$branch_selector"
+
+  # Create a temporary action script for branch operations
+  cat > "$action_script" << 'EOF'
+#!/bin/bash
+action="$1"
+input="$2"
+base_name="${input%% *}"  # Just take everything before the first space
+key="${3:-}"  # Optional key for rebase actions
+
+case "$action" in
+  "checkout")
+    # Show selector for branch to checkout
+    echo -e "\033[1;33mSelect branch to checkout:\033[0m"
+    selected_branch=$(SHELL=/bin/bash fzf --ansi \
+      --preview "$branch_selector {}" \
+      --preview-window="right:65%:wrap" \
+      --header="Select branch to checkout (Enter to confirm, Ctrl-C to cancel)" \
+      < <(git branch --list "$base_name-[0-9]*" --format="%(refname:short)" | sort -V))
+
+    if [ -n "$selected_branch" ]; then
+      git checkout "$selected_branch"
+    fi
+    ;;
+  "delete")
+    # Get the latest branch in the stack
+    latest_branch=$(git branch --list "$base_name-[0-9]*" --format="%(refname:short)" | sort -V | tail -n1)
+    git branch -D "$latest_branch"
+    ;;
+  "rebase")
+    if [ "$key" = "1" ]; then
+      # Get the latest branch in the stack
+      latest_branch=$(git branch --list "$base_name-[0-9]*" --format="%(refname:short)" | sort -V | tail -n1)
+      
+      # Check if we're on the latest branch
+      current_branch=$(git rev-parse --abbrev-ref HEAD)
+      if [ "$current_branch" != "$latest_branch" ]; then
+        echo "Checking out latest branch '$latest_branch' first..."
+        if ! git checkout "$latest_branch"; then
+          echo "Error: Failed to checkout latest branch"
+          exit 1
+        fi
+      fi
+
+      # Show selector for base branch
+      echo -e "\033[1;33mSelect branch to rebase onto:\033[0m"
+      base_branch=$(SHELL=/bin/bash fzf --ansi \
+        --preview "$(realpath "$rebase_selector") {}" \
+        --preview-window="right:65%:wrap" \
+        --header="Select base branch for rebase (Enter to confirm, Ctrl-C to cancel)" \
+        < <(echo "main"; git branch --list "$base_name-[0-9]*" --format="%(refname:short)" | sort -V | while read -r b; do
+          if [ "$b" != "$latest_branch" ]; then
+            echo "$b"
+          fi
+        done))
+
+      if [ -n "$base_branch" ]; then
+        # Get current branch
+        current_branch=$(git rev-parse --abbrev-ref HEAD)
+        
+        # Try a dry-run rebase to check for conflicts
+        if git merge-base --is-ancestor "$base_branch" "$current_branch"; then
+          echo "Already up to date with $base_branch"
+          exit 0
+        fi
+        
+        if git rebase --no-ff --dry-run "$base_branch" &>/dev/null; then
+          # No conflicts expected, do a normal rebase
+          echo "No conflicts detected, performing rebase with update-refs..."
+          git rebase "$base_branch" --update-refs
+        else
+          # Conflicts expected, use interactive mode
+          echo "Potential conflicts detected, starting interactive rebase..."
+          git rebase -i "$base_branch" --update-refs
+        fi
+      fi
+    fi
+    ;;
+esac
+EOF
+  chmod +x "$action_script"
+
+  # Use fzf to select a stack with interactive preview
+  local selected
+  selected=$(echo "$stack_bases" | \
     fzf --ansi \
         --no-mouse \
         --preview "$preview_script {}" \
-        --preview-window=right:65% \
+        --preview-window='right:65%:wrap' \
         --bind 'ctrl-p:toggle-preview' \
-        --header "Stack Branches (CTRL-P: toggle preview, Enter: checkout latest)")
+        --bind 'right:preview-down,left:preview-up' \
+        --bind "enter:execute:$action_script checkout {}" \
+        --bind "ctrl-d:execute:$action_script delete {}" \
+        --bind "ctrl-r:change-preview($preview_script {} rebase)" \
+        --bind "1:execute:$action_script rebase {} 1" \
+        --bind "esc:change-preview($preview_script {} normal)" \
+        --header "Stack Browser
+→ Use arrows to navigate
+→ Right/Left to scroll preview
+→ Enter to checkout latest branch
+→ Ctrl-D to delete latest branch
+→ Ctrl-R to show rebase options
+→ Ctrl-P to toggle preview
+→ Ctrl-C to exit")
 
   # Clean up
-  rm -f "$preview_script"
+  rm -rf "$temp_dir"
 
-  # If a stack was selected, checkout the highest numbered branch
-  if [ -n "$selected_stack" ]; then
-    local latest_branch
-    latest_branch=$(git branch --list "${selected_stack}-[0-9]*" --format="%(refname:short)" | sort -V | tail -n1)
-    if [ -n "$latest_branch" ]; then
-      echo "Checking out latest branch in stack: $latest_branch"
-      git checkout "$latest_branch"
+  # If a stack was selected, show success message
+  if [ -n "$selected" ]; then
+    echo "Selected stack: $selected"
+  fi
+}
+
+# Check the health of a stack by verifying that each branch is based on its parent
+# Returns 0 if healthy, 1 if needs attention
+# Usage: check_stack_health "base-name"
+check_stack_health() {
+  local base_name="$1"
+  local branches
+  local prev_branch=""
+  local current_branch
+  local temp_file
+  local result=0
+  
+  # Create temporary file
+  temp_file=$(mktemp)
+  
+  # Get all branches in the stack, sorted by number
+  branches=$(git branch --list "${base_name}-[0-9]*" --format="%(refname:short)" | sort -V)
+  
+  if [ -z "$branches" ]; then
+    echo "No branches found in stack '$base_name'"
+    rm -f "$temp_file"
+    return 1
+  fi
+
+  # For the first branch, check if it's based on main
+  first_branch=$(echo "$branches" | head -n1)
+  if ! git merge-base --is-ancestor main "$first_branch" 2>/dev/null; then
+    echo "$first_branch needs rebase onto main"
+    rm -f "$temp_file"
+    return 1
+  fi
+
+  # Save remaining branches to temp file
+  echo "$branches" | tail -n +2 > "$temp_file"
+
+  # Check each subsequent branch is based on its parent
+  prev_branch="$first_branch"
+  while read -r branch; do
+    if ! git merge-base --is-ancestor "$prev_branch" "$branch" 2>/dev/null; then
+      echo "$branch needs rebase onto $prev_branch"
+      result=1
+      break
     fi
+    prev_branch="$branch"
+  done < "$temp_file"
+
+  # Clean up
+  rm -f "$temp_file"
+
+  if [ $result -eq 0 ]; then
+    echo "Stack '$base_name' is healthy"
+  fi
+  return $result
+}
+
+# Get a one-line health status for a stack
+# Returns: "healthy" or "needs rebase"
+# Usage: status=$(get_stack_health_status "base-name")
+get_stack_health_status() {
+  local base_name="$1"
+  if check_stack_health "$base_name" >/dev/null 2>&1; then
+    echo "healthy"
+  else
+    echo "needs rebase"
+  fi
+}
+
+# Show health status of specified stack or all stacks
+function show_stack_status() {
+  local stack_name="$1"
+  local current_branch
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+  # If no stack specified, show status for all stacks
+  if [ -z "$stack_name" ]; then
+    # Get all stack bases
+    local stack_bases
+    stack_bases=$(git branch --format='%(refname:short)' | grep -E '^.+-[0-9]+$' | sed -E 's/-[0-9]+$//' | sort -u)
+    
+    if [ -z "$stack_bases" ]; then
+      echo "No stacks found."
+      exit 0
+    fi
+
+    # Show status for each stack
+    local first=true
+    while read -r base; do
+      if [ "$first" = true ]; then
+        first=false
+      else
+        echo
+      fi
+      show_single_stack_status "$base" "$current_branch"
+    done <<< "$stack_bases"
+  else
+    show_single_stack_status "$stack_name" "$current_branch"
+  fi
+}
+
+# Helper function to show status of a single stack
+function show_single_stack_status() {
+  local stack_name="$1"
+  local current_branch="$2"
+
+  # Get all branches in the stack
+  local branches
+  branches=$(get_stack_branches "$stack_name")
+  if [ -z "$branches" ]; then
+    echo "Error: No branches found in stack '$stack_name'"
+    return 1
+  fi
+
+  # Show stack info
+  echo "Stack: $stack_name"
+  echo "Branches:"
+  while read -r branch; do
+    if [ "$branch" = "$current_branch" ]; then
+      echo "  → $branch"
+    else
+      echo "    $branch"
+    fi
+  done <<< "$branches"
+  echo
+
+  # Show health status
+  echo "Status:"
+  local health_output
+  health_output=$(check_stack_health "$stack_name" 2>&1)
+  if [ $? -eq 0 ]; then
+    echo "  ✅ Stack is healthy"
+  else
+    echo "  ⚠️  Stack needs attention:"
+    echo "$health_output" | sed 's/^/    /'
+  fi
+}
+
+# Fix a stack by rebasing divergent branches
+# Usage: fix_stack [base_name]
+# If no base_name is provided, uses the current branch's stack
+function fix_stack() {
+  local base_name="$1"
+  local current_branch
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+  # If no base name provided, try to get it from current branch
+  if [ -z "$base_name" ]; then
+    if ! get_stack_info; then
+      echo "Error: Not currently on a stack branch and no stack name provided."
+      echo "Usage: $0 fix [stack-name]"
+      exit 1
+    fi
+    base_name="$STACK_BASE"
+  fi
+
+  # Get all branches in the stack
+  local branches
+  branches=$(git branch --list "${base_name}-[0-9]*" --format="%(refname:short)" | sort -V)
+  
+  if [ -z "$branches" ]; then
+    echo "Error: No branches found in stack '$base_name'"
+    exit 1
+  fi
+
+  # Check if stack is healthy first
+  if check_stack_health "$base_name" >/dev/null 2>&1; then
+    echo "Stack '$base_name' is already healthy!"
+    return 0
+  fi
+
+  # Find the divergent branch
+  local prev_branch=""
+  local divergent_branch=""
+  local target_branch=""
+  
+  # First check if the first branch needs rebasing onto main
+  first_branch=$(echo "$branches" | head -n1)
+  if ! git merge-base --is-ancestor main "$first_branch" 2>/dev/null; then
+    divergent_branch="$first_branch"
+    target_branch="main"
+  else
+    # Check subsequent branches
+    prev_branch="$first_branch"
+    while read -r branch; do
+      if ! git merge-base --is-ancestor "$prev_branch" "$branch" 2>/dev/null; then
+        divergent_branch="$branch"
+        target_branch="$prev_branch"
+        break
+      fi
+      prev_branch="$branch"
+    done <<< "$(echo "$branches" | tail -n +2)"
+  fi
+
+  if [ -z "$divergent_branch" ]; then
+    echo "Error: Could not identify the divergent branch"
+    exit 1
+  fi
+
+  echo "Found divergent branch: $divergent_branch"
+  echo "Needs to be rebased onto: $target_branch"
+
+  # Check for potential conflicts
+  if ! git merge-base --is-ancestor "$target_branch" "$divergent_branch" 2>/dev/null; then
+    # Try a dry-run rebase to check for conflicts
+    if git rebase --no-ff --dry-run "$target_branch" "$divergent_branch" &>/dev/null; then
+      echo "No conflicts detected, performing automatic rebase..."
+      
+      # Save current branch to return to it later
+      local original_branch="$current_branch"
+      
+      # Checkout the divergent branch
+      if ! git checkout "$divergent_branch"; then
+        echo "Error: Failed to checkout $divergent_branch"
+        exit 1
+      fi
+      
+      # Perform the rebase
+      if git rebase "$target_branch" --update-refs; then
+        echo "Successfully rebased $divergent_branch onto $target_branch"
+        
+        # Return to original branch if different
+        if [ "$original_branch" != "$divergent_branch" ]; then
+          git checkout "$original_branch"
+        fi
+        
+        # Check if the stack is now healthy
+        if check_stack_health "$base_name" >/dev/null 2>&1; then
+          echo "✅ Stack is now healthy!"
+        else
+          echo "⚠️  Stack may need additional fixes. Run 'git stack status' to check."
+        fi
+      else
+        echo "Error: Rebase failed"
+        echo "Aborting rebase..."
+        git rebase --abort
+        
+        # Return to original branch
+        if [ "$original_branch" != "$divergent_branch" ]; then
+          git checkout "$original_branch"
+        fi
+        exit 1
+      fi
+    else
+      echo "Conflicts detected, attempting to skip conflicting commit..."
+      
+      # Save current branch
+      local original_branch="$current_branch"
+      
+      # Checkout the divergent branch
+      if ! git checkout "$divergent_branch"; then
+        echo "Error: Failed to checkout $divergent_branch"
+        exit 1
+      fi
+      
+      # Start the rebase
+      if git rebase "$target_branch" --update-refs; then
+        echo "Successfully rebased $divergent_branch onto $target_branch"
+      else
+        # If rebase stops due to conflict, try to skip the commit
+        if [ -d ".git/rebase-apply" ] || [ -d ".git/rebase-merge" ]; then
+          echo "Attempting to skip conflicting commit..."
+          if git rebase --skip; then
+            echo "Successfully skipped conflicting commit and completed rebase"
+          else
+            echo "Failed to skip conflicting commit"
+            git rebase --abort
+            if [ "$original_branch" != "$divergent_branch" ]; then
+              git checkout "$original_branch"
+            fi
+            exit 1
+          fi
+        else
+          echo "Rebase failed in an unexpected way"
+          git rebase --abort
+          if [ "$original_branch" != "$divergent_branch" ]; then
+            git checkout "$original_branch"
+          fi
+          exit 1
+        fi
+      fi
+      
+      # Return to original branch if different
+      if [ "$original_branch" != "$divergent_branch" ]; then
+        git checkout "$original_branch"
+      fi
+      
+      # Check if the stack is now healthy
+      if check_stack_health "$base_name" >/dev/null 2>&1; then
+        echo "✅ Stack is now healthy!"
+      else
+        echo "⚠️  Stack may need additional fixes. Run 'git stack status' to check."
+      fi
+    fi
+  else
+    echo "Error: Unexpected state - branches appear to be in sync"
+    exit 1
   fi
 }
 
@@ -297,6 +742,12 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       ;;
     list)
       list_stacks
+      ;;
+    status)
+      show_stack_status "$@"
+      ;;
+    fix)
+      fix_stack "$@"
       ;;
     *)
       usage
