@@ -15,9 +15,6 @@
 #   delete      -> Looks at the current branch to determine the stack <base>, prompts to confirm, then force-deletes.
 # -----------------------------------------------------------------------------
 
-subcommand="$1"
-shift
-
 function usage() {
   echo "Git Branch Stack Management"
   echo
@@ -64,38 +61,38 @@ function create_branch() {
 # Returns the base name and number of the current branch if it's part of a stack
 # Usage: if get_stack_info; then echo "Base: $STACK_BASE, Number: $STACK_NUM"; fi
 get_stack_info() {
-    local current_branch
-    current_branch=$(git rev-parse --abbrev-ref HEAD)
-    
-    if [[ $current_branch =~ ^([^0-9]+)-([0-9]+)$ ]]; then
-        STACK_BASE="${BASH_REMATCH[1]}"
-        STACK_NUM="${BASH_REMATCH[2]}"
-        return 0  # Success
-    else
-        STACK_BASE=""
-        STACK_NUM=""
-        return 1  # Not a stack branch
-    fi
+  local current_branch
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+  
+  if [[ $current_branch =~ ^([^0-9]+)-([0-9]+)$ ]]; then
+    STACK_BASE="${BASH_REMATCH[1]}"
+    STACK_NUM="${BASH_REMATCH[2]}"
+    return 0  # Success
+  else
+    STACK_BASE=""
+    STACK_NUM=""
+    return 1  # Not a stack branch
+  fi
 }
 
 # Gets all branches belonging to a stack
 # Usage: get_stack_branches "base-name"
 get_stack_branches() {
-    local base_name="$1"
-    git branch --list "${base_name}-*" | sed 's/^[* ]*//'
+  local base_name="$1"
+  git branch --list "${base_name}-*" | sed 's/^[* ]*//'
 }
 
 # Modify increment_stack to use the new function
 increment_stack() {
-    if get_stack_info; then
-        local new_num=$((STACK_NUM + 1))
-        local new_branch="${STACK_BASE}-${new_num}"
-        git checkout -b "$new_branch"
-        echo "Branch '$new_branch' successfully created and checked out."
-    else
-        echo "Error: Current branch is not part of a stack (should match '<base>-<number>' pattern)."
-        exit 1
-    fi
+  if get_stack_info; then
+    local new_num=$((STACK_NUM + 1))
+    local new_branch="${STACK_BASE}-${new_num}"
+    git checkout -b "$new_branch"
+    echo "Branch '$new_branch' successfully created and checked out."
+  else
+    echo "Error: Current branch is not part of a stack (should match '<base>-<number>' pattern)."
+    exit 1
+  fi
 }
 
 # Force-delete all local branches in the stack "<base_name>-*"
@@ -203,23 +200,29 @@ function delete_shorthand() {
   esac
 }
 
-# Subcommand dispatch
-case "$subcommand" in
-  create)
-    create_branch "$@"
-    ;;
-  increment)
-    increment_stack
-    ;;
-  delete)
-    # If no args, do interactive shorthand; otherwise do standard logic
-    if [ $# -eq 0 ]; then
-      delete_shorthand
-    else
-      delete_stack "$@"
-    fi
-    ;;
-  *)
-    usage
-    ;;
-esac
+# Only process arguments if script is run directly (not sourced)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  subcommand="$1"
+  shift
+
+  # Subcommand dispatch
+  case "$subcommand" in
+    create)
+      create_branch "$@"
+      ;;
+    increment)
+      increment_stack
+      ;;
+    delete)
+      # If no args, do interactive shorthand; otherwise do standard logic
+      if [ $# -eq 0 ]; then
+        delete_shorthand
+      else
+        delete_stack "$@"
+      fi
+      ;;
+    *)
+      usage
+      ;;
+  esac
+fi
