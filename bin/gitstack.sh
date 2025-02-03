@@ -10,6 +10,8 @@
 #   gitstack.sh list           # <-- interactive stack browser with preview
 #   gitstack.sh status [stack] # <-- show health status of specified stack or all stacks
 #   gitstack.sh fix [stack]    # <-- fix an unhealthy stack by rebasing divergent branches
+#   gitstack.sh prev          # <-- checkout previous branch in stack (e.g. feature-2 -> feature-1)
+#   gitstack.sh next          # <-- checkout next branch in stack (e.g. feature-2 -> feature-3)
 #
 # Description:
 #   create      -> Creates a new branch named "<base_name>-0".
@@ -19,6 +21,8 @@
 #   list        -> Interactive browser for stacks with branch details preview.
 #   status      -> Shows health status of all stacks (or specified stack if provided).
 #   fix         -> Fix an unhealthy stack by rebasing divergent branches.
+#   prev        -> Checkout previous branch in stack (e.g. feature-2 -> feature-1).
+#   next        -> Checkout next branch in stack (e.g. feature-2 -> feature-3).
 # -----------------------------------------------------------------------------
 
 function usage() {
@@ -32,6 +36,8 @@ function usage() {
   echo "  $0 list                  (Interactive stack browser with branch preview)"
   echo "  $0 status [stack]        (Show health status of specified stack or all stacks)"
   echo "  $0 fix [stack]           (Fix an unhealthy stack by rebasing divergent branches)"
+  echo "  $0 prev                  (Checkout previous branch in stack)"
+  echo "  $0 next                  (Checkout next branch in stack)"
   echo
   echo "Commands:"
   echo "  create      Creates a new branch named '<base_name>-0'."
@@ -41,6 +47,8 @@ function usage() {
   echo "  list        Interactive browser for stacks with branch details preview."
   echo "  status      Shows health status of all stacks (or specified stack if provided)."
   echo "  fix         Fix an unhealthy stack by rebasing divergent branches."
+  echo "  prev        Checkout previous branch in stack (e.g. feature-2 -> feature-1)."
+  echo "  next        Checkout next branch in stack (e.g. feature-2 -> feature-3)."
   exit 1
 }
 
@@ -719,6 +727,62 @@ function fix_stack() {
   fi
 }
 
+# Navigate to the previous branch in the stack
+function prev_stack() {
+  if ! get_stack_info; then
+    echo "Error: Current branch is not part of a stack (should match '<base>-<number>' pattern)."
+    exit 1
+  fi
+
+  # If we're at feature-0, there is no previous branch
+  if [ "$STACK_NUM" -eq 0 ]; then
+    echo "Already at the first branch in stack. No previous branch exists."
+    exit 0
+  fi
+
+  local prev_num=$((STACK_NUM - 1))
+  local prev_branch="${STACK_BASE}-${prev_num}"
+
+  # Check if the previous branch exists
+  if ! git rev-parse --verify "$prev_branch" &>/dev/null; then
+    echo "Error: Previous branch '$prev_branch' does not exist."
+    exit 1
+  fi
+
+  # Checkout the previous branch
+  if ! git checkout "$prev_branch"; then
+    echo "Error: Failed to checkout branch '$prev_branch'."
+    exit 1
+  fi
+
+  echo "Successfully checked out previous branch '$prev_branch'."
+}
+
+# Navigate to the next branch in the stack
+function next_stack() {
+  if ! get_stack_info; then
+    echo "Error: Current branch is not part of a stack (should match '<base>-<number>' pattern)."
+    exit 1
+  fi
+
+  local next_num=$((STACK_NUM + 1))
+  local next_branch="${STACK_BASE}-${next_num}"
+
+  # Check if the next branch exists
+  if ! git rev-parse --verify "$next_branch" &>/dev/null; then
+    echo "No next branch '$next_branch' exists in the stack."
+    exit 0
+  fi
+
+  # Checkout the next branch
+  if ! git checkout "$next_branch"; then
+    echo "Error: Failed to checkout branch '$next_branch'."
+    exit 1
+  fi
+
+  echo "Successfully checked out next branch '$next_branch'."
+}
+
 # Only process arguments if script is run directly (not sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   subcommand="$1"
@@ -733,11 +797,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       increment_stack
       ;;
     delete)
-      # If no args, do interactive shorthand; otherwise do standard logic
-      if [ $# -eq 0 ]; then
-        delete_shorthand
+      if [ "$1" = "-f" ] || [ "$1" = "--force" ]; then
+        delete_stack "$1" "$2"
       else
-        delete_stack "$@"
+        delete_shorthand
       fi
       ;;
     list)
@@ -748,6 +811,12 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       ;;
     fix)
       fix_stack "$@"
+      ;;
+    prev)
+      prev_stack
+      ;;
+    next)
+      next_stack
       ;;
     *)
       usage
