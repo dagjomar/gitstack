@@ -339,6 +339,92 @@ function test_fix_command() {
   echo "✅ Fix command tests passed"
 }
 
+# Test prev and next navigation functionality
+function test_stack_navigation() {
+  echo "Testing stack navigation (prev/next)..."
+
+  # Create a test stack with multiple branches
+  git checkout main 2>/dev/null || git checkout master 2>/dev/null
+  "$SCRIPT_DIR/gitstack.sh" create nav-test
+  echo "test1" > test1.txt
+  git add test1.txt
+  git commit -m "test1"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test2" > test2.txt
+  git add test2.txt
+  git commit -m "test2"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test3" > test3.txt
+  git add test3.txt
+  git commit -m "test3"
+
+  # Test navigation from middle branch
+  git checkout nav-test-1
+  
+  # Test next navigation
+  "$SCRIPT_DIR/gitstack.sh" next
+  local current
+  current=$(current_branch)
+  if [ "$current" = "nav-test-2" ]; then
+    echo "✅ next command successfully navigated to nav-test-2"
+  else
+    fail "next command failed to navigate to nav-test-2, got $current"
+  fi
+
+  # Test prev navigation
+  "$SCRIPT_DIR/gitstack.sh" prev
+  current=$(current_branch)
+  if [ "$current" = "nav-test-1" ]; then
+    echo "✅ prev command successfully navigated to nav-test-1"
+  else
+    fail "prev command failed to navigate to nav-test-1, got $current"
+  fi
+
+  # Test prev at start of stack
+  git checkout nav-test-0
+  if "$SCRIPT_DIR/gitstack.sh" prev 2>&1 | grep -q "Already at the first branch"; then
+    echo "✅ prev command correctly handled start of stack"
+  else
+    fail "prev command should indicate when at start of stack"
+  fi
+
+  # Test next at end of stack
+  git checkout nav-test-2
+  if "$SCRIPT_DIR/gitstack.sh" next 2>&1 | grep -q "No next branch"; then
+    echo "✅ next command correctly handled end of stack"
+  else
+    fail "next command should indicate when at end of stack"
+  fi
+
+  # Test on non-stack branch
+  git checkout -b not-a-stack-branch
+  if "$SCRIPT_DIR/gitstack.sh" next 2>&1 | grep -q "not part of a stack"; then
+    echo "✅ navigation commands correctly handle non-stack branches"
+  else
+    fail "navigation commands should error on non-stack branches"
+  fi
+
+  # Clean up
+  git checkout main 2>/dev/null || git checkout master 2>/dev/null
+  "$SCRIPT_DIR/gitstack.sh" delete -f nav-test
+  git branch -D not-a-stack-branch
+  rm -f test1.txt test2.txt test3.txt
+}
+
+# Run all tests
+function run_all_tests() {
+  source_gitstack
+  test_get_stack_info
+  test_get_stack_branches
+  test_list_stacks
+  test_stack_health
+  test_status_command
+  test_fix_command
+  test_stack_navigation
+}
+
 # Get the absolute path of the script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -359,16 +445,8 @@ git commit -m "Initial commit"
 
 echo "Starting git stack tests..."
 
-# Source gitstack.sh to get access to internal functions
-source "$SCRIPT_DIR/gitstack.sh"
-
-# Run new tests first
-test_get_stack_info
-test_get_stack_branches
-test_list_stacks
-test_stack_health
-test_status_command
-test_fix_command
+# Run all tests
+run_all_tests
 
 # Optional: Clean up any existing test branches from previous runs
 git branch -D foo-0 foo-1 foo-2 2>/dev/null || true
