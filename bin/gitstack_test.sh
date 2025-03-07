@@ -413,6 +413,30 @@ function test_stack_navigation() {
   rm -f test1.txt test2.txt test3.txt
 }
 
+# Test convert to stack functionality
+function test_convert_to_stack() {
+  echo "Testing convert to stack..."
+  
+  # Create a regular branch
+  git checkout main 2>/dev/null || git checkout master 2>/dev/null
+  git checkout -b dj/my-feature
+  
+  # Test converting to stack branch
+  # Simulate user input 'y' for the prompt
+  echo "y" | "$SCRIPT_DIR/gitstack.sh" create
+  
+  local current
+  current=$(current_branch)
+  if [ "$current" = "dj/my-feature-0" ]; then
+    echo "✅ Successfully converted 'dj/my-feature' to 'dj/my-feature-0'"
+  else
+    fail "Failed to convert branch to stack, got '$current'"
+  fi
+  
+  git checkout main 2>/dev/null || git checkout master 2>/dev/null
+  git branch -D dj/my-feature-0
+}
+
 # Run all tests
 function run_all_tests() {
   source_gitstack
@@ -423,6 +447,7 @@ function run_all_tests() {
   test_status_command
   test_fix_command
   test_stack_navigation
+  test_convert_to_stack
 }
 
 # Get the absolute path of the script directory

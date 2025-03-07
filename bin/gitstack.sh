@@ -55,12 +55,46 @@ function usage() {
 # Create a new branch: "<base_name>-0"
 function create_branch() {
   local base_name="$1"
+  local current_branch
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
 
+  # If no base name provided, try to convert current branch
   if [ -z "$base_name" ]; then
-    echo "Error: Missing <base_name> for 'create'."
-    usage
+    # Check if already on a stack branch
+    if get_stack_info; then
+      echo "Already on a stack branch '$current_branch'."
+      exit 0
+    fi
+    
+    # Prompt for confirmation
+    read -r -p "Already on a branch named $current_branch. Create a stack from this branch? [Y/n] " response
+    response=${response:-y}  # Default to yes
+    
+    if [[ ! "$response" =~ ^[Yy]$ ]]; then
+      echo "Conversion cancelled."
+      exit 0
+    fi
+    
+    # Create new stack branch
+    local new_branch="${current_branch}-0"
+    
+    # Check if the new branch already exists
+    if git rev-parse --verify "$new_branch" &>/dev/null; then
+      echo "Error: Branch '$new_branch' already exists. Aborting."
+      exit 1
+    fi
+    
+    echo "Creating stack branch: $new_branch"
+    if ! git checkout -b "$new_branch"; then
+      echo "Error: Failed to create branch '$new_branch'."
+      exit 1
+    fi
+    
+    echo "Branch '$new_branch' successfully created and checked out."
+    return 0
   fi
 
+  # Original functionality for when base_name is provided
   local new_branch="${base_name}-0"
 
   # Check if branch already exists
@@ -781,6 +815,60 @@ function next_stack() {
   fi
 
   echo "Successfully checked out next branch '$next_branch'."
+}
+
+# Force-push all branches in a stack to remote
+# Usage: fp_stack [base_name]
+# If no base_name is provided, uses the current branch's stack
+function fp_stack() {
+  local base_name="$1"
+  local current_branch
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+  # If no base name provided, try to get it from current branch
+  if [ -z "$base_name" ]; then
+    if ! get_stack_info; then
+      echo "Error: Not currently on a stack branch and no stack name provided."
+      echo "Usage: $0 fp [stack-name]"
+      exit 1
+    fi
+    base_name="$STACK_BASE"
+  fi
+
+  # Get all branches in the stack
+  local branches
+  branches=$(git branch --list "${base_name}-[0-9]*" --format="%(refname:short)" | sort -V)
+  
+  if [ -z "$branches" ]; then
+    echo "Error: No branches found in stack '$base_name'"
+    exit 1
+  fi
+
+  # Save current branch to return to it later
+  local original_branch="$current_branch"
+  local success=true
+
+  echo "Force-pushing branches in stack '$base_name' to remote..."
+  while read -r branch; do
+    echo "Pushing $branch..."
+    if ! git push -f origin "$branch"; then
+      echo "Error: Failed to push branch '$branch'"
+      success=false
+      break
+    fi
+  done <<< "$branches"
+
+  # Return to original branch if different
+  if [ "$original_branch" != "$current_branch" ]; then
+    git checkout "$original_branch"
+  fi
+
+  if [ "$success" = true ]; then
+    echo "✅ Successfully force-pushed all branches in stack '$base_name'"
+  else
+    echo "⚠️  Some branches may not have been pushed successfully"
+    exit 1
+  fi
 }
 
 # Only process arguments if script is run directly (not sourced)
