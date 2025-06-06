@@ -12,6 +12,7 @@
 #   gitstack.sh fix [stack]    # <-- fix an unhealthy stack by rebasing divergent branches
 #   gitstack.sh prev          # <-- checkout previous branch in stack (e.g. feature-2 -> feature-1)
 #   gitstack.sh next          # <-- checkout next branch in stack (e.g. feature-2 -> feature-3)
+#   gitstack.sh push [stack]  # <-- force-push all branches in a stack to remote
 #
 # Description:
 #   create      -> Creates a new branch named "<base_name>-0".
@@ -23,6 +24,7 @@
 #   fix         -> Fix an unhealthy stack by rebasing divergent branches.
 #   prev        -> Checkout previous branch in stack (e.g. feature-2 -> feature-1).
 #   next        -> Checkout next branch in stack (e.g. feature-2 -> feature-3).
+#   push        -> Force-push all branches in a stack to remote (uses current stack if none specified).
 # -----------------------------------------------------------------------------
 
 function usage() {
@@ -38,6 +40,7 @@ function usage() {
   echo "  $0 fix [stack]           (Fix an unhealthy stack by rebasing divergent branches)"
   echo "  $0 prev                  (Checkout previous branch in stack)"
   echo "  $0 next                  (Checkout next branch in stack)"
+  echo "  $0 push [stack]          (Force-push all branches in a stack to remote)"
   echo
   echo "Commands:"
   echo "  create      Creates a new branch named '<base_name>-0'."
@@ -49,6 +52,7 @@ function usage() {
   echo "  fix         Fix an unhealthy stack by rebasing divergent branches."
   echo "  prev        Checkout previous branch in stack (e.g. feature-2 -> feature-1)."
   echo "  next        Checkout next branch in stack (e.g. feature-2 -> feature-3)."
+  echo "  push        Force-push all branches in a stack to remote. Uses current stack if none specified."
   exit 1
 }
 
@@ -905,6 +909,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       ;;
     next)
       next_stack
+      ;;
+    push)
+      fp_stack "$@"
       ;;
     *)
       usage
