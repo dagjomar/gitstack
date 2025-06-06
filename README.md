@@ -19,6 +19,8 @@ Git Stack is a simple, no-frills command-line utility that makes managing stacke
 
 - **Delete Branch Stacks:** Force-delete entire stacks of branches efficiently.
 
+- **Push Branch Stacks:** Force-push all branches in a stack to remote with a single command.
+
 ## Installation
 
 1. **Clone the Repository:**
@@ -78,6 +80,14 @@ Alternatively, to interactively delete the current branch's stack:
 ```
 
 This command prompts for confirmation before deleting the stack.
+
+- **Push a Branch Stack:**
+
+```bash
+  git stack push [base_name]
+```
+
+Force-pushes all branches in a stack to the remote repository. If no base name is provided, it uses the current branch's stack.
 
 ## TODOs
 - Create better usage examples and use cases explaining how to best us it in a normal workflow
