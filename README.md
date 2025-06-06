@@ -7,7 +7,7 @@
 
 ## Overview
 
-Git Stack is a simple, no-frills command-line utility that makes managing stacked Git branches quick and painless. Whether you’re creating, incrementing, or cleaning up branches, Git Stack helps you stay organized with minimal effort, so you can focus on what matters—writing code.
+Git Stack is a simple, no-frills command-line utility that makes managing stacked Git branches quick and painless. Whether you're creating, incrementing, or cleaning up branches, Git Stack helps you stay organized with minimal effort, so you can focus on what matters—writing code.
 
 ## Features
 
@@ -16,6 +16,8 @@ Git Stack is a simple, no-frills command-line utility that makes managing stacke
 - **Increment Branches:** Quickly create subsequent branches in the stack with an incremented suffix.
 
 - **Delete Branch Stacks:** Force-delete entire stacks of branches efficiently.
+
+- **Push Branch Stacks:** Force-push all branches in a stack to remote with a single command.
 
 ## Installation
 
@@ -76,6 +78,14 @@ Alternatively, to interactively delete the current branch's stack:
 ```
 
 This command prompts for confirmation before deleting the stack.
+
+- **Push a Branch Stack:**
+
+```bash
+  git stack push [base_name]
+```
+
+Force-pushes all branches in a stack to the remote repository. If no base name is provided, it uses the current branch's stack.
 
 ## TODOs
 - Create better usage examples and use cases explaining how to best us it in a normal workflow
