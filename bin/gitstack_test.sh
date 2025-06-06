@@ -439,6 +439,65 @@ function test_convert_to_stack() {
   git branch -D dj/my-feature-0
 }
 
+# Test push command functionality
+function test_push_command() {
+  echo "Testing push command..."
+
+  # Set up a fake remote to test pushing
+  git init --bare "$TEST_DIR/remote.git"
+  git remote add origin "$TEST_DIR/remote.git"
+
+  # Create a test stack with multiple branches
+  git checkout main 2>/dev/null || git checkout master 2>/dev/null
+  "$SCRIPT_DIR/gitstack.sh" create push-test
+  echo "test1" > test1.txt
+  git add test1.txt
+  git commit -m "test1"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test2" > test2.txt
+  git add test2.txt
+  git commit -m "test2"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test3" > test3.txt
+  git add test3.txt
+  git commit -m "test3"
+
+  # Test push from current stack branch
+  if "$SCRIPT_DIR/gitstack.sh" push 2>&1 | grep -q "Successfully force-pushed all branches"; then
+    echo "✅ push command successfully pushed from current stack"
+  else
+    fail "push command failed to push from current stack"
+  fi
+
+  # Verify all branches were pushed to remote
+  local remote_branches
+  remote_branches=$(git ls-remote --heads origin | awk '{print $2}' | sed 's|refs/heads/||')
+  
+  if echo "$remote_branches" | grep -q "push-test-0" && \
+     echo "$remote_branches" | grep -q "push-test-1" && \
+     echo "$remote_branches" | grep -q "push-test-2"; then
+    echo "✅ All stack branches successfully pushed to remote"
+  else
+    fail "Not all stack branches were pushed to remote"
+  fi
+
+  # Test push with explicit stack name from different branch
+  git checkout main 2>/dev/null || git checkout master 2>/dev/null
+  if "$SCRIPT_DIR/gitstack.sh" push push-test 2>&1 | grep -q "Successfully force-pushed all branches"; then
+    echo "✅ push command with explicit stack name worked"
+  else
+    fail "push command with explicit stack name failed"
+  fi
+
+  # Clean up
+  git remote remove origin
+  rm -rf "$TEST_DIR/remote.git"
+  "$SCRIPT_DIR/gitstack.sh" delete -f push-test
+  rm -f test1.txt test2.txt test3.txt
+}
+
 # Run all tests
 function run_all_tests() {
   source_gitstack
@@ -450,6 +509,7 @@ function run_all_tests() {
   test_fix_command
   test_stack_navigation
   test_convert_to_stack
+  test_push_command
 }
 
 # Create a temporary test directory
