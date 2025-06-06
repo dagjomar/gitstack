@@ -1,13 +1,15 @@
 # Git Stack
 ## A lightweight command-line tool for effortless Git branch stack management.
 
+[![Tests](https://github.com/dagjomar/gitstack/actions/workflows/test.yml/badge.svg)](https://github.com/dagjomar/gitstack/actions/workflows/test.yml)
+
 <img src="./docs/gitstack.jpeg" alt="Git Stack Illustration" width="500"/>
 
 <br />
 
 ## Overview
 
-Git Stack is a simple, no-frills command-line utility that makes managing stacked Git branches quick and painless. Whether you’re creating, incrementing, or cleaning up branches, Git Stack helps you stay organized with minimal effort, so you can focus on what matters—writing code.
+Git Stack is a simple, no-frills command-line utility that makes managing stacked Git branches quick and painless. Whether you're creating, incrementing, or cleaning up branches, Git Stack helps you stay organized with minimal effort, so you can focus on what matters—writing code.
 
 ## Features
 
