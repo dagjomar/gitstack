@@ -20,6 +20,9 @@
 
 set -e  # Exit immediately if a command exits with a nonzero status
 
+# Get the absolute path of the script directory BEFORE changing directories
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 function current_branch() {
   git rev-parse --abbrev-ref HEAD
 }
@@ -32,7 +35,6 @@ function fail() {
 # Test helper function to source gitstack.sh and make functions available for testing
 function source_gitstack() {
   # Source the main script to get access to internal functions
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   echo "Sourcing from: $SCRIPT_DIR/gitstack.sh"
   source "$SCRIPT_DIR/gitstack.sh"
 }
@@ -450,9 +452,6 @@ function run_all_tests() {
   test_convert_to_stack
 }
 
-# Get the absolute path of the script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # Create a temporary test directory
 TEST_DIR=$(mktemp -d)
 echo "Creating test repository in $TEST_DIR"
@@ -467,6 +466,11 @@ git config --local user.name "Test User"
 touch README.md
 git add README.md
 git commit -m "Initial commit"
+
+# Rename master to main if needed (for consistency)
+if git rev-parse --verify master &>/dev/null && ! git rev-parse --verify main &>/dev/null; then
+  git branch -m master main
+fi
 
 echo "Starting git stack tests..."
 

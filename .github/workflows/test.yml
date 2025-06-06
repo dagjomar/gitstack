@@ -14,13 +14,24 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
+    - name: Verify repository structure
+      run: |
+        echo "Current directory: $(pwd)"
+        echo "Repository contents:"
+        ls -la
+        echo "Bin directory contents:"
+        ls -la bin/
+        
     - name: Make test script executable
       run: chmod +x bin/gitstack_test.sh
       
     - name: Run gitstack tests
+      working-directory: .
       run: |
         echo "🧪 Running gitstack tests..."
-        if bin/gitstack_test.sh; then
+        echo "Working directory: $(pwd)"
+        echo "Running from: $(realpath bin/gitstack_test.sh)"
+        if ./bin/gitstack_test.sh; then
           echo "✅ All tests passed!"
         else
           echo "❌ Tests failed!"
