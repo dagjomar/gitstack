@@ -45,7 +45,20 @@
 - Custom stack naming conventions
 
 ## CI/CD Integration
-- GitHub/GitLab PR creation for stack branches
+- **Smart PR/MR Creation for Stack Branches** (PRIORITY)
+  - `git stack pr` - Auto-create GitHub PR targeting correct parent branch
+    - Auto-detect current stack position (e.g. feature-2)
+    - Calculate parent branch (feature-1, or main if feature-0)
+    - Detect `gh` CLI availability
+    - Run: `gh pr create -B <parent-branch> [additional-args]`
+    - Show confirmation of target branch before creating
+  - `git stack mr` - Auto-create GitLab MR targeting correct parent branch
+    - Same logic but for `glab` CLI
+    - Run: `glab mr create -b <parent-branch> [additional-args]`
+  - Enhanced PR/MR descriptions
+    - Auto-populate with stack context
+    - Show branch hierarchy in description
+    - Include stack health status
 - Auto-update PR descriptions with stack info
 - Stack visualization in PR comments
 - CI pipeline integration
