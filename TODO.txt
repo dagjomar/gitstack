@@ -13,12 +13,12 @@
 - Detect and warn about potential stack issues
 
 ## Stack Status & Overview
-- Add `git stack status` command showing:
-  - Current active stack
-  - All branches in the stack with latest commits
+- ✅ Add `git stack status` command showing: (COMPLETED)
+  - ✅ Current active stack (COMPLETED)
+  - ✅ All branches in the stack with latest commits (COMPLETED)
   - Remote sync status for each branch
-  - Conflict detection between stack branches
-  - Stack depth and health metrics
+  - ✅ Conflict detection between stack branches (COMPLETED)
+  - ✅ Stack depth and health metrics (COMPLETED)
 
 ## Advanced Stack Operations
 - `git stack rebase` - Rebase entire stack onto main
@@ -28,12 +28,14 @@
 - Undo/redo support for stack operations
 
 ## Documentation Improvements
-- Rewrite README with clear use-cases
-- Add visual examples of stack workflows
-- Document common patterns and best practices
+- ✅ Rewrite README with a clear use-case (COMPLETED)
+- ✅ Add a visual example of stack workflow (COMPLETED)
+- Document common patterns and best practices (COMPLETED)
+- ✅ Include a real-world example (COMPLETED)
 - Add troubleshooting section
-- Include real-world examples
 - Add architecture documentation
+- Create better usage examples and use cases explaining how to best use it in a normal workflow
+- Create command to manage rebasing
 
 ## Configuration & Customization
 - Customizable branch naming patterns
@@ -43,7 +45,20 @@
 - Custom stack naming conventions
 
 ## CI/CD Integration
-- GitHub/GitLab PR creation for stack branches
+- **Smart PR/MR Creation for Stack Branches** (PRIORITY)
+  - `git stack pr` - Auto-create GitHub PR targeting correct parent branch
+    - Auto-detect current stack position (e.g. feature-2)
+    - Calculate parent branch (feature-1, or main if feature-0)
+    - Detect `gh` CLI availability
+    - Run: `gh pr create -B <parent-branch> [additional-args]`
+    - Show confirmation of target branch before creating
+  - `git stack mr` - Auto-create GitLab MR targeting correct parent branch
+    - Same logic but for `glab` CLI
+    - Run: `glab mr create -b <parent-branch> [additional-args]`
+  - Enhanced PR/MR descriptions
+    - Auto-populate with stack context
+    - Show branch hierarchy in description
+    - Include stack health status
 - Auto-update PR descriptions with stack info
 - Stack visualization in PR comments
 - CI pipeline integration
