@@ -13,6 +13,7 @@
 #   gitstack.sh prev          # <-- checkout previous branch in stack (e.g. feature-2 -> feature-1)
 #   gitstack.sh next          # <-- checkout next branch in stack (e.g. feature-2 -> feature-3)
 #   gitstack.sh push [stack]  # <-- force-push all branches in a stack to remote
+#   gitstack.sh pr [gh-args]  # <-- create GitHub PR targeting correct parent branch
 #
 # Description:
 #   create      -> Creates a new branch named "<base_name>-0".
@@ -25,6 +26,7 @@
 #   prev        -> Checkout previous branch in stack (e.g. feature-2 -> feature-1).
 #   next        -> Checkout next branch in stack (e.g. feature-2 -> feature-3).
 #   push        -> Force-push all branches in a stack to remote (uses current stack if none specified).
+#   pr          -> Create GitHub PR targeting correct parent branch in stack.
 # -----------------------------------------------------------------------------
 
 function usage() {
@@ -41,6 +43,7 @@ function usage() {
   echo "  $0 prev                  (Checkout previous branch in stack)"
   echo "  $0 next                  (Checkout next branch in stack)"
   echo "  $0 push [stack]          (Force-push all branches in a stack to remote)"
+  echo "  $0 pr [gh-args]          (Create GitHub PR targeting correct parent branch)"
   echo
   echo "Commands:"
   echo "  create      Creates a new branch named '<base_name>-0'."
@@ -53,6 +56,7 @@ function usage() {
   echo "  prev        Checkout previous branch in stack (e.g. feature-2 -> feature-1)."
   echo "  next        Checkout next branch in stack (e.g. feature-2 -> feature-3)."
   echo "  push        Force-push all branches in a stack to remote. Uses current stack if none specified."
+  echo "  pr          Create GitHub PR targeting correct parent branch. Passes additional args to 'gh pr create'."
   exit 1
 }
 
@@ -875,6 +879,99 @@ function fp_stack() {
   fi
 }
 
+# Create GitHub PR targeting correct parent branch in stack
+# Usage: create_github_pr [additional-gh-args...]
+function create_github_pr() {
+  # Handle help flags
+  for arg in "$@"; do
+    if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+      echo "git stack pr - Create GitHub PR targeting correct parent branch"
+      echo
+      echo "Usage: git stack pr [gh-args...]"
+      echo
+      echo "This command automatically:"
+      echo "  • Detects your current stack position (e.g., feature-2)"
+      echo "  • Calculates the correct parent branch (feature-1, or main if feature-0)"
+      echo "  • Creates PR targeting that parent branch"
+      echo "  • Uses --fill to auto-populate title and description from commits"
+      echo
+      echo "Examples:"
+      echo "  git stack pr                    # Basic PR creation"
+      echo "  git stack pr --draft            # Create draft PR"
+      echo "  git stack pr --reviewer @user   # Add reviewer"
+      echo
+      echo "Additional arguments are passed to 'gh pr create'."
+      exit 0
+    fi
+  done
+
+  # Check if gh CLI is available
+  if ! command -v gh &> /dev/null; then
+    echo "Error: GitHub CLI (gh) is not installed or not in PATH."
+    echo "Install it from: https://cli.github.com/"
+    exit 1
+  fi
+
+  # Check if we're on a stack branch
+  if ! get_stack_info; then
+    echo "Error: Current branch is not part of a stack (should match '<base>-<number>' pattern)."
+    echo "Cannot determine parent branch for PR creation."
+    exit 1
+  fi
+
+  local current_branch
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+  local parent_branch
+
+  # Determine parent branch
+  if [ "$STACK_NUM" -eq 0 ]; then
+    # For feature-0, target main or master
+    if git rev-parse --verify main &>/dev/null; then
+      parent_branch="main"
+    elif git rev-parse --verify master &>/dev/null; then
+      parent_branch="master"
+    else
+      echo "Error: Cannot find main or master branch to target."
+      exit 1
+    fi
+  else
+    # For feature-N (N > 0), target feature-(N-1)
+    local parent_num=$((STACK_NUM - 1))
+    parent_branch="${STACK_BASE}-${parent_num}"
+    
+    # Verify parent branch exists
+    if ! git rev-parse --verify "$parent_branch" &>/dev/null; then
+      echo "Error: Parent branch '$parent_branch' does not exist."
+      echo "Stack may be incomplete or corrupted."
+      exit 1
+    fi
+  fi
+
+  # Show confirmation
+  echo "Creating GitHub PR:"
+  echo "  From: $current_branch"
+  echo "  To:   $parent_branch"
+  echo
+
+  # Confirm with user
+  read -r -p "Proceed with PR creation? [Y/n] " response
+  response=${response:-y}  # Default to yes
+  
+  if [[ ! "$response" =~ ^[Yy]$ ]]; then
+    echo "PR creation cancelled."
+    exit 0
+  fi
+
+  # Create PR with gh CLI
+  echo "Running: gh pr create -B $parent_branch --fill $*"
+  if gh pr create -B "$parent_branch" --fill "$@"; then
+    echo "✅ GitHub PR created successfully!"
+  else
+    echo "❌ Failed to create GitHub PR"
+    exit 1
+  fi
+}
+
 # Only process arguments if script is run directly (not sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   subcommand="$1"
@@ -912,6 +1009,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       ;;
     push)
       fp_stack "$@"
+      ;;
+    pr)
+      create_github_pr "$@"
       ;;
     *)
       usage
