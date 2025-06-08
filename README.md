@@ -11,6 +11,48 @@
 
 Git Stack is a simple, no-frills command-line utility that makes managing stacked Git branches quick and painless. Whether you're creating, incrementing, or cleaning up branches, Git Stack helps you stay organized with minimal effort, so you can focus on what matters—writing code.
 
+## When Git Stack Helps
+
+**Scenario**: Bob wants to refactor `example-file.ts`. His plan: (1) add unit tests for existing functionality, (2) refactor the inner workings, (3) add a new function with updated tests.
+
+**With Git Stack**:
+```bash
+# When on main branch, make a new stack with a name:
+$main > git stack create bob
+> created branch "bob-0"
+$bob-0 > git commit "add unit-test"
+$bob-0 > git stack increment  
+> created branch "bob-1"
+$bob-1 > git commit "refactor file"
+$bob-1 > git stack increment
+> created branch "bob-2"  
+$bob-2 > git commit "add functionality"
+```
+
+**Now the branch structure looks like:**
+```
+bob-2 (add functionality)
+  |
+bob-1 (refactor file)
+  |  
+bob-0 (add unit-test)
+  |
+main
+```
+
+**When Alice requests changes on the first PR:**
+```bash
+$bob-2 > git checkout bob-0
+$bob-0 > # make Alice's requested changes
+$bob-0 > git commit --amend
+$bob-0 > git stack fix
+> rebasing bob-1 onto bob-0...
+> rebasing bob-2 onto bob-1...
+> stack updated successfully
+```
+
+**Result**: Bob spends time coding, not wrestling with git. One command handles the cascade of updates across his entire dependent branch stack, keeping everything in sync while his PRs are under review.
+
 ## Features
 
 - **Create Stacked Branches:** Easily initialize a new branch stack with a base name.
