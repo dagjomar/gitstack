@@ -28,12 +28,14 @@
 - Undo/redo support for stack operations
 
 ## Documentation Improvements
-- Rewrite README with clear use-cases
-- Add visual examples of stack workflows
-- Document common patterns and best practices
+- ✅ Rewrite README with a clear use-case (COMPLETED)
+- ✅ Add a visual example of stack workflow (COMPLETED)
+- Document common patterns and best practices (COMPLETED)
+- ✅ Include a real-world example (COMPLETED)
 - Add troubleshooting section
-- Include real-world examples
 - Add architecture documentation
+- Create better usage examples and use cases explaining how to best use it in a normal workflow
+- Create command to manage rebasing
 
 ## Configuration & Customization
 - Customizable branch naming patterns
