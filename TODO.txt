@@ -46,12 +46,14 @@
 
 ## CI/CD Integration
 - **Smart PR/MR Creation for Stack Branches** (PRIORITY)
-  - `git stack pr` - Auto-create GitHub PR targeting correct parent branch
-    - Auto-detect current stack position (e.g. feature-2)
-    - Calculate parent branch (feature-1, or main if feature-0)
-    - Detect `gh` CLI availability
-    - Run: `gh pr create -B <parent-branch> [additional-args]`
-    - Show confirmation of target branch before creating
+  - ✅ `git stack pr` - Auto-create GitHub PR targeting correct parent branch (COMPLETED)
+    - ✅ Auto-detect current stack position (e.g. feature-2) (COMPLETED)
+    - ✅ Calculate parent branch (feature-1, or main if feature-0) (COMPLETED)
+    - ✅ Detect `gh` CLI availability (COMPLETED)
+    - ✅ Run: `gh pr create -B <parent-branch> --fill [additional-args]` (COMPLETED)
+    - ✅ Show confirmation of target branch before creating (COMPLETED)
+    - ✅ Handle --help flag properly (COMPLETED)
+    - ✅ Pass through additional gh CLI arguments (COMPLETED)
   - `git stack mr` - Auto-create GitLab MR targeting correct parent branch
     - Same logic but for `glab` CLI
     - Run: `glab mr create -b <parent-branch> [additional-args]`
