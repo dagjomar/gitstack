@@ -83,7 +83,7 @@ function create_branch() {
       exit 0
     fi
     
-    # Create new stack branch
+    # Create new stack branch by renaming current branch
     local new_branch="${current_branch}-0"
     
     # Check if the new branch already exists
@@ -92,13 +92,13 @@ function create_branch() {
       exit 1
     fi
     
-    echo "Creating stack branch: $new_branch"
-    if ! git checkout -b "$new_branch"; then
-      echo "Error: Failed to create branch '$new_branch'."
+    echo "Converting branch to stack branch: $new_branch"
+    if ! git branch -m "$new_branch"; then
+      echo "Error: Failed to rename branch to '$new_branch'."
       exit 1
     fi
     
-    echo "Branch '$new_branch' successfully created and checked out."
+    echo "Branch successfully converted to '$new_branch'."
     return 0
   fi
 

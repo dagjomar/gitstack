@@ -435,6 +435,13 @@ function test_convert_to_stack() {
     fail "Failed to convert branch to stack, got '$current'"
   fi
   
+  # Verify the original branch no longer exists
+  if git rev-parse --verify dj/my-feature &>/dev/null; then
+    fail "Original branch 'dj/my-feature' still exists after conversion"
+  else
+    echo "✅ Original branch 'dj/my-feature' was properly renamed"
+  fi
+  
   git checkout main 2>/dev/null || git checkout master 2>/dev/null
   git branch -D dj/my-feature-0
 }
