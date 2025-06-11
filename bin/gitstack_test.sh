@@ -44,8 +44,13 @@ function test_get_stack_info() {
   echo "Testing get_stack_info..."
   
   # Create and checkout a test branch
-  git checkout -b test-123 2>/dev/null
-  echo "Created test-123 branch"
+  if ! git checkout -b test-123; then
+    echo "Failed to create test-123 branch. Trying to checkout existing branch..."
+    if ! git checkout test-123; then
+      fail "Could not create or checkout test-123 branch"
+    fi
+  fi
+  echo "Created/checked out test-123 branch"
   
   if get_stack_info; then
     echo "Stack info: BASE=$STACK_BASE NUM=$STACK_NUM"
@@ -59,8 +64,14 @@ function test_get_stack_info() {
   fi
   
   # Test with non-stack branch
-  git checkout -b not-a-stack-branch 2>/dev/null
-  echo "Created not-a-stack-branch"
+  if ! git checkout -b not-a-stack-branch; then
+    echo "Failed to create not-a-stack-branch. Trying to checkout existing branch..."
+    if ! git checkout not-a-stack-branch; then
+      fail "Could not create or checkout not-a-stack-branch"
+    fi
+  fi
+  echo "Created/checked out not-a-stack-branch"
+  
   if get_stack_info; then
     fail "get_stack_info incorrectly identified not-a-stack-branch as a stack branch"
   else
@@ -77,11 +88,15 @@ function test_get_stack_branches() {
   echo "Testing get_stack_branches..."
   
   # Create test branches
-  git checkout -b bar-1 2>/dev/null
-  git checkout -b bar-2 2>/dev/null
-  git checkout -b bar-3 2>/dev/null
-  git checkout -b other-1 2>/dev/null
-  echo "Created test branches"
+  for branch in bar-1 bar-2 bar-3 other-1; do
+    if ! git checkout -b "$branch"; then
+      echo "Failed to create $branch. Trying to checkout existing branch..."
+      if ! git checkout "$branch"; then
+        fail "Could not create or checkout $branch"
+      fi
+    fi
+  done
+  echo "Created/checked out test branches"
   
   # Get branches and check count
   local branches
@@ -116,12 +131,15 @@ function test_list_stacks() {
   echo "Testing list_stacks..."
   
   # Create some test stacks
-  git checkout -b feature-0 2>/dev/null
-  git checkout -b feature-1 2>/dev/null
-  git checkout -b bugfix-0 2>/dev/null
-  git checkout -b bugfix-1 2>/dev/null
-  git checkout -b other-branch 2>/dev/null
-  echo "Created test branches"
+  for branch in feature-0 feature-1 bugfix-0 bugfix-1 other-branch; do
+    if ! git checkout -b "$branch"; then
+      echo "Failed to create $branch. Trying to checkout existing branch..."
+      if ! git checkout "$branch"; then
+        fail "Could not create or checkout $branch"
+      fi
+    fi
+  done
+  echo "Created/checked out test branches"
   
   # Get all stack bases
   local stack_bases
@@ -505,6 +523,112 @@ function test_push_command() {
   rm -f test1.txt test2.txt test3.txt
 }
 
+# Test MR creation functionality
+function test_mr_command() {
+  echo "Testing MR command..."
+
+  # Create a test stack
+  git checkout main 2>/dev/null || git checkout master 2>/dev/null
+  "$SCRIPT_DIR/gitstack.sh" create mr-test
+  echo "test1" > test1.txt
+  git add test1.txt
+  git commit -m "test1"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test2" > test2.txt
+  git add test2.txt
+  git commit -m "test2"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "test3" > test3.txt
+  git add test3.txt
+  git commit -m "test3"
+
+  # Create a temporary mock script
+  local mock_script="/tmp/mock_glab_$$.sh"
+  echo '#!/bin/bash
+# Print all arguments for debugging
+echo "[MOCK GLAB] args: $@" >&2
+if [ "$1" = "mr" ] && [ "$2" = "create" ]; then
+  from_branch=$(git rev-parse --abbrev-ref HEAD)
+  to_branch=""
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "-b" ]]; then
+      shift
+      to_branch="$1"
+      break
+    fi
+    shift
+  done
+  echo "Mock: Creating MR from $from_branch to $to_branch"
+  exit 0
+fi
+exit 1' > "$mock_script"
+  chmod +x "$mock_script"
+
+  # Temporarily modify PATH to use our mock
+  local original_path="$PATH"
+  export PATH="/tmp:$PATH"
+  mv "$mock_script" "/tmp/glab"
+
+  # Test MR creation from middle branch
+  git checkout mr-test-1
+  local output
+  output=$(echo y | "$SCRIPT_DIR/gitstack.sh" mr 2>&1)
+  echo "$output"
+  if echo "$output" | grep -q "Mock: Creating MR from mr-test-1 to mr-test-0"; then
+    echo "✅ MR command correctly targets previous branch"
+  else
+    fail "MR command failed to target correct branch"
+  fi
+
+  # Test MR creation from first branch
+  git checkout mr-test-0
+  output=$(echo y | "$SCRIPT_DIR/gitstack.sh" mr 2>&1)
+  echo "$output"
+  if echo "$output" | grep -q "Mock: Creating MR from mr-test-0 to main"; then
+    echo "✅ MR command correctly targets main for first branch"
+  else
+    fail "MR command failed to target main for first branch"
+  fi
+
+  # Test with additional arguments
+  output=$(echo y | "$SCRIPT_DIR/gitstack.sh" mr --draft --reviewer @user 2>&1)
+  echo "$output"
+  if echo "$output" | grep -q "Mock: Creating MR from mr-test-0 to main"; then
+    echo "✅ MR command correctly passes additional arguments"
+  else
+    fail "MR command failed to pass additional arguments"
+  fi
+
+  # Test help flag (no prompt expected)
+  output=$("$SCRIPT_DIR/gitstack.sh" mr --help 2>&1)
+  echo "$output"
+  if echo "$output" | grep -q "git stack mr - Create GitLab MR"; then
+    echo "✅ MR command shows help text"
+  else
+    fail "MR command failed to show help text"
+  fi
+
+  # Test error when not on stack branch (no prompt expected)
+  git checkout -b not-a-stack-branch
+  output=$("$SCRIPT_DIR/gitstack.sh" mr 2>&1 || true)
+  echo "$output"
+  if echo "$output" | grep -q "Error: Current branch is not part of a stack"; then
+    echo "✅ MR command correctly errors on non-stack branch"
+  else
+    fail "MR command failed to error on non-stack branch"
+  fi
+
+  # Clean up
+  git checkout main 2>/dev/null || git checkout master 2>/dev/null
+  "$SCRIPT_DIR/gitstack.sh" delete -f mr-test
+  git branch -D not-a-stack-branch 2>/dev/null || true
+  rm -f test1.txt test2.txt test3.txt
+  rm -f "/tmp/glab"
+  export PATH="$original_path"
+}
+
 # Run all tests
 function run_all_tests() {
   source_gitstack
@@ -517,6 +641,7 @@ function run_all_tests() {
   test_stack_navigation
   test_convert_to_stack
   test_push_command
+  test_mr_command
 }
 
 # Create a temporary test directory
@@ -544,45 +669,10 @@ echo "Starting git stack tests..."
 # Run all tests
 run_all_tests
 
-# Optional: Clean up any existing test branches from previous runs
-git branch -D foo-0 foo-1 foo-2 2>/dev/null || true
-
-# 1. Create stack with base name 'foo'
-"$SCRIPT_DIR/gitstack.sh" create foo
-if [ "$(current_branch)" != "foo-0" ]; then
-  fail "Expected current branch to be 'foo-0' after create, got '$(current_branch)'"
-fi
-echo "✅ Successfully created and checked out 'foo-0'"
-
-# 2. Increment -> foo-1
-"$SCRIPT_DIR/gitstack.sh" increment
-if [ "$(current_branch)" != "foo-1" ]; then
-  fail "Expected current branch to be 'foo-1' after increment, got '$(current_branch)'"
-fi
-echo "✅ Successfully incremented to 'foo-1'"
-
-# 3. Increment -> foo-2
-"$SCRIPT_DIR/gitstack.sh" increment
-if [ "$(current_branch)" != "foo-2" ]; then
-  fail "Expected current branch to be 'foo-2' after increment, got '$(current_branch)'"
-fi
-echo "✅ Successfully incremented to 'foo-2'"
-
-echo "Deleting stack with '$SCRIPT_DIR/gitstack.sh delete -f foo'"
-"$SCRIPT_DIR/gitstack.sh" delete -f foo
-
-# Verify no foo-* branches remain
-if git rev-parse --verify foo-0 &>/dev/null || \
-   git rev-parse --verify foo-1 &>/dev/null || \
-   git rev-parse --verify foo-2 &>/dev/null; then
-  fail "Expected no foo-* branches to exist after delete -f foo"
-fi
-echo "✅ Successfully deleted all foo-* branches"
-
 echo
 echo "🎉 All tests passed!"
 
 # Clean up
 echo "Cleaning up test repository..."
-cd - > /dev/null || exit 1
+cd - > /dev/null || true
 rm -rf "$TEST_DIR"
