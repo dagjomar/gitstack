@@ -14,6 +14,7 @@
 #   gitstack.sh next          # <-- checkout next branch in stack (e.g. feature-2 -> feature-3)
 #   gitstack.sh push [stack]  # <-- force-push all branches in a stack to remote
 #   gitstack.sh pr [gh-args]  # <-- create GitHub PR targeting correct parent branch
+#   gitstack.sh mr [glab-args] # <-- create GitLab MR targeting correct parent branch
 #
 # Description:
 #   create      -> Creates a new branch named "<base_name>-0".
@@ -27,6 +28,7 @@
 #   next        -> Checkout next branch in stack (e.g. feature-2 -> feature-3).
 #   push        -> Force-push all branches in a stack to remote (uses current stack if none specified).
 #   pr          -> Create GitHub PR targeting correct parent branch in stack.
+#   mr          -> Create GitLab MR targeting correct parent branch in stack.
 # -----------------------------------------------------------------------------
 
 function usage() {
@@ -44,6 +46,7 @@ function usage() {
   echo "  $0 next                  (Checkout next branch in stack)"
   echo "  $0 push [stack]          (Force-push all branches in a stack to remote)"
   echo "  $0 pr [gh-args]          (Create GitHub PR targeting correct parent branch)"
+  echo "  $0 mr [glab-args]        (Create GitLab MR targeting correct parent branch)"
   echo
   echo "Commands:"
   echo "  create      Creates a new branch named '<base_name>-0'."
@@ -57,6 +60,7 @@ function usage() {
   echo "  next        Checkout next branch in stack (e.g. feature-2 -> feature-3)."
   echo "  push        Force-push all branches in a stack to remote. Uses current stack if none specified."
   echo "  pr          Create GitHub PR targeting correct parent branch. Passes additional args to 'gh pr create'."
+  echo "  mr          Create GitLab MR targeting correct parent branch. Passes additional args to 'glab mr create'."
   exit 1
 }
 
@@ -972,6 +976,98 @@ function create_github_pr() {
   fi
 }
 
+# Create GitLab MR targeting correct parent branch in stack
+# Usage: create_gitlab_mr [additional-glab-args...]
+function create_gitlab_mr() {
+  # Handle help flags
+  for arg in "$@"; do
+    if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+      echo "git stack mr - Create GitLab MR targeting correct parent branch"
+      echo
+      echo "Usage: git stack mr [glab-args...]"
+      echo
+      echo "This command automatically:"
+      echo "  • Detects your current stack position (e.g., feature-2)"
+      echo "  • Calculates the correct parent branch (feature-1, or main if feature-0)"
+      echo "  • Creates MR targeting that parent branch"
+      echo
+      echo "Examples:"
+      echo "  git stack mr                    # Basic MR creation"
+      echo "  git stack mr --draft            # Create draft MR"
+      echo "  git stack mr --reviewer @user   # Add reviewer"
+      echo
+      echo "Additional arguments are passed to 'glab mr create'."
+      exit 0
+    fi
+  done
+
+  # Check if glab CLI is available
+  if ! command -v glab &> /dev/null; then
+    echo "Error: GitLab CLI (glab) is not installed or not in PATH."
+    echo "Install it from: https://gitlab.com/gitlab-org/cli#installation"
+    exit 1
+  fi
+
+  # Check if we're on a stack branch
+  if ! get_stack_info; then
+    echo "Error: Current branch is not part of a stack (should match '<base>-<number>' pattern)."
+    echo "Cannot determine parent branch for MR creation."
+    exit 1
+  fi
+
+  local current_branch
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+  local parent_branch
+
+  # Determine parent branch
+  if [ "$STACK_NUM" -eq 0 ]; then
+    # For feature-0, target main or master
+    if git rev-parse --verify main &>/dev/null; then
+      parent_branch="main"
+    elif git rev-parse --verify master &>/dev/null; then
+      parent_branch="master"
+    else
+      echo "Error: Cannot find main or master branch to target."
+      exit 1
+    fi
+  else
+    # For feature-N (N > 0), target feature-(N-1)
+    local parent_num=$((STACK_NUM - 1))
+    parent_branch="${STACK_BASE}-${parent_num}"
+    
+    # Verify parent branch exists
+    if ! git rev-parse --verify "$parent_branch" &>/dev/null; then
+      echo "Error: Parent branch '$parent_branch' does not exist."
+      echo "Stack may be incomplete or corrupted."
+      exit 1
+    fi
+  fi
+
+  # Show confirmation
+  echo "Creating GitLab MR:"
+  echo "  From: $current_branch"
+  echo "  To:   $parent_branch"
+  echo
+
+  # Confirm with user
+  read -r -p "Proceed with MR creation? [Y/n] " response
+  response=${response:-y}  # Default to yes
+  
+  if [[ ! "$response" =~ ^[Yy]$ ]]; then
+    echo "MR creation cancelled."
+    exit 0
+  fi
+
+  # Create MR with glab CLI
+  echo "Running: glab mr create -b $parent_branch $*"
+  if glab mr create -b "$parent_branch" "$@"; then
+    echo "✅ GitLab MR created successfully!"
+  else
+    echo "❌ Failed to create GitLab MR"
+    exit 1
+  fi
+}
+
 # Only process arguments if script is run directly (not sourced)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   subcommand="$1"
@@ -1012,6 +1108,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       ;;
     pr)
       create_github_pr "$@"
+      ;;
+    mr)
+      create_gitlab_mr "$@"
       ;;
     *)
       usage
