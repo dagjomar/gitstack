@@ -629,6 +629,503 @@ exit 1' > "$mock_script"
   export PATH="$original_path"
 }
 
+# Test for stack fix bug with merge conflict and downstream changes
+function test_stack_fix_merge_conflict_bug() {
+  echo "Testing stack fix bug with merge conflict and downstream changes..."
+
+  # Setup: create stack and files
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" create conflict-stack-branch
+  echo "original line a 1" > a.txt
+  git add a.txt
+  echo "original line b 1" > b.txt
+  echo "original line b 2" >> b.txt
+  git add b.txt
+  git commit -m "edit a.txt and b.txt in conflict-stack-branch-0"
+
+  # increment stack
+  "$SCRIPT_DIR/gitstack.sh" increment
+
+  # Create edits to a new file b.txt, modifying line 2
+  echo "original line b 1" > b.txt
+  echo "edited line b 2" >> b.txt
+  echo "new line b 3" >> b.txt
+  git add b.txt
+  git commit -m "edit b.txt (line 2,3) in conflict-stack-branch-1"
+
+  # go back to previous commit in stack
+  "$SCRIPT_DIR/gitstack.sh" prev
+
+  # Create conflicting edits to b.txt (line 1)
+  echo "upstream edited line b 1" > b.txt
+  echo "upstream edited line b 2" >> b.txt
+  
+  git add b.txt
+  git commit -m "edit a.txt and b.txt in conflict-stack-branch-0"
+
+  # This will now break the stack, and our tree at branch-1 will contain the old commit from branch-0
+  
+  # Run fix and expect failure due to merge conflict
+  output=$("$SCRIPT_DIR/gitstack.sh" fix conflict-stack-branch 2>&1 || true)
+  if echo "$output" | grep -q "Conflicts detected during rebase" && echo "$output" | grep -q "Found divergent branch: conflict-stack-branch-1" && echo "$output" | grep -q "Needs to be rebased onto: conflict-stack-branch-0" && echo "$output" | grep -q "Please manually resolve the conflicts by rebasing 'conflict-stack-branch-1' onto 'conflict-stack-branch-0'"; then
+    echo "✅ Fix command failed as expected with clear merge conflict error message (non-tip case)"
+  else
+    echo "$output"
+    fail "Fix command did not fail as expected or did not print the correct error message (non-tip case)"
+  fi
+
+  # Clean up
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f conflict-stack-branch
+  rm -f a.txt b.txt
+}
+
+# Test rebase command functionality (experimental rebase --onto algorithm)
+function test_rebase_command() {
+  echo "Testing rebase command (experimental rebase --onto algorithm)..."
+
+  # Using 1 commit per branch (as required by the rebase command)
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" create rebase-test
+  
+  # Branch 0: 1 commit with file a1.txt
+  echo "content a1" > a1.txt
+  git add a1.txt
+  git commit -m "commit on rebase-test-0"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  
+  # Branch 1: 1 commit with file b1.txt (different file, no conflict)
+  echo "content b1" > b1.txt
+  git add b1.txt
+  git commit -m "commit on rebase-test-1"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  
+  # Branch 2: 1 commit with file c1.txt (different file, no conflict)
+  echo "content c1" > c1.txt
+  git add c1.txt
+  git commit -m "commit on rebase-test-2"
+
+  # Verify initial state is healthy
+  local status
+  status=$(get_stack_health_status "rebase-test")
+  assert_equals "healthy" "$status" "Stack should be healthy initially"
+
+  # Make stack unhealthy by amending a commit in branch-0
+  # Only modify a1.txt (the file that belongs to this branch)
+  git checkout rebase-test-0
+  echo "content a1 amended" > a1.txt
+  git add a1.txt
+  git commit --amend --no-edit
+  
+  # Verify stack is now unhealthy
+  status=$(get_stack_health_status "rebase-test")
+  assert_equals "needs rebase" "$status" "Stack should need rebase after amending"
+
+  # Test rebase command (should succeed without conflicts since each branch uses different files)
+  if ! "$SCRIPT_DIR/gitstack.sh" rebase rebase-test; then
+    fail "Rebase command failed"
+  fi
+
+  # Verify stack is healthy again
+  status=$(get_stack_health_status "rebase-test")
+  assert_equals "healthy" "$status" "Stack should be healthy after rebase"
+
+  # Verify that commits are preserved
+  git checkout rebase-test-1
+  if [ ! -f "b1.txt" ]; then
+    fail "File from rebase-test-1 should exist after rebase"
+  fi
+  if ! grep -q "content b1" b1.txt; then
+    fail "File contents should be preserved on rebase-test-1"
+  fi
+  
+  git checkout rebase-test-2
+  if [ ! -f "c1.txt" ]; then
+    fail "File from rebase-test-2 should exist after rebase"
+  fi
+  if ! grep -q "content c1" c1.txt; then
+    fail "File contents should be preserved on rebase-test-2"
+  fi
+
+  # Verify the amended commit is in rebase-test-0
+  git checkout rebase-test-0
+  if ! grep -q "content a1 amended" a1.txt; then
+    fail "Amended commit should be preserved in rebase-test-0"
+  fi
+
+  # Clean up
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f rebase-test
+  rm -f a1.txt b1.txt c1.txt
+  echo "✅ Rebase command tests passed"
+}
+
+# Test rebase command with single file line conflict
+function test_rebase_single_file_line_conflict() {
+  echo "Testing rebase command with single file line conflict..."
+
+  # Create a stack with two branches, both modifying the same line in the same file
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" create conflict-test
+  
+  # Branch 0: modify line 1 of file.txt
+  echo "line 1 from branch-0" > file.txt
+  echo "line 2" >> file.txt
+  git add file.txt
+  git commit -m "modify line 1 on conflict-test-0"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  
+  # Branch 1: modify the same line 1 of file.txt (will conflict)
+  echo "line 1 from branch-1" > file.txt
+  echo "line 2" >> file.txt
+  git add file.txt
+  git commit -m "modify line 1 on conflict-test-1"
+
+  # Verify initial state is healthy
+  local status
+  status=$(get_stack_health_status "conflict-test")
+  assert_equals "healthy" "$status" "Stack should be healthy initially"
+
+  # Make stack unhealthy by amending branch-0 (modifying the same line again)
+  git checkout conflict-test-0
+  echo "line 1 from branch-0 amended" > file.txt
+  echo "line 2" >> file.txt
+  git add file.txt
+  git commit --amend --no-edit
+  
+  # Verify stack is now unhealthy
+  status=$(get_stack_health_status "conflict-test")
+  assert_equals "needs rebase" "$status" "Stack should need rebase after amending"
+
+  # Test rebase command - should detect conflict and abort, or succeed if git can resolve it
+  output=$("$SCRIPT_DIR/gitstack.sh" rebase conflict-test 2>&1 || true)
+  
+  # Check if rebase succeeded (git might be able to resolve the conflict automatically)
+  if echo "$output" | grep -q "Successfully rebased all branches"; then
+    # Rebase succeeded - verify stack is healthy
+    status=$(get_stack_health_status "conflict-test")
+    if [ "$status" = "healthy" ]; then
+      echo "✅ Rebase succeeded (git was able to resolve the conflict automatically)"
+    else
+      fail "Rebase reported success but stack is not healthy"
+    fi
+  elif echo "$output" | grep -q "Rebase procedure aborted due to merge conflicts"; then
+    # Conflict detected and rebase aborted
+    echo "✅ Conflict correctly detected and rebase aborted"
+    
+    # Verify that we got instructions for manual resolution
+    if echo "$output" | grep -q "Please manually rebase"; then
+      echo "✅ Manual resolution instructions provided"
+    else
+      fail "Expected manual resolution instructions, but they weren't provided"
+    fi
+    
+    # Verify repository is in a clean state (no rebase in progress)
+    if [ -d ".git/rebase-apply" ] || [ -d ".git/rebase-merge" ]; then
+      fail "Repository should be in clean state (no rebase in progress), but rebase directories exist"
+    else
+      echo "✅ Repository is in clean state after abort"
+    fi
+  else
+    # Unexpected outcome
+    fail "Rebase did not succeed or abort as expected. Output: $output"
+  fi
+
+  # Clean up
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f conflict-test
+  rm -f file.txt
+  echo "✅ Rebase single file line conflict test passed"
+}
+
+# Test rebase command with single file, different lines (conflict expected)
+# Note: Even when branches modify different lines, rebasing can still cause conflicts
+# because git needs to reapply the changes on top of the amended base commit
+function test_rebase_single_file_different_lines_conflict() {
+  echo "Testing rebase command with single file, different lines (conflict expected)..."
+
+  # Create a stack with two branches, modifying different lines in the same file
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" create no-conflict-test
+  
+  # Branch 0: modify line 1 of file.txt
+  echo "line 1 from branch-0" > file.txt
+  echo "line 2" >> file.txt
+  git add file.txt
+  git commit -m "modify line 1 on no-conflict-test-0"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  
+  # Branch 1: add a new line (line 3) without modifying line 1
+  # Even though different lines are modified, this can still conflict during rebase
+  echo "line 1 from branch-0" > file.txt
+  echo "line 2" >> file.txt
+  echo "line 3 from branch-1" >> file.txt
+  git add file.txt
+  git commit -m "add line 3 on no-conflict-test-1"
+
+  # Verify initial state is healthy
+  local status
+  status=$(get_stack_health_status "no-conflict-test")
+  assert_equals "healthy" "$status" "Stack should be healthy initially"
+
+  # Make stack unhealthy by amending branch-0 (modifying line 1 again)
+  git checkout no-conflict-test-0
+  echo "line 1 from branch-0 amended" > file.txt
+  echo "line 2" >> file.txt
+  git add file.txt
+  git commit --amend --no-edit
+  
+  # Verify stack is now unhealthy
+  status=$(get_stack_health_status "no-conflict-test")
+  assert_equals "needs rebase" "$status" "Stack should need rebase after amending"
+
+  # Test rebase command - may succeed or conflict depending on git's ability to reapply changes
+  # Git needs to reapply branch-1's changes on top of the amended base
+  output=$("$SCRIPT_DIR/gitstack.sh" rebase no-conflict-test 2>&1 || true)
+  
+  # Check if rebase succeeded (git might be able to resolve it automatically)
+  if echo "$output" | grep -q "Successfully rebased all branches"; then
+    # Rebase succeeded - verify stack is healthy
+    status=$(get_stack_health_status "no-conflict-test")
+    if [ "$status" = "healthy" ]; then
+      echo "✅ Rebase succeeded (git was able to resolve changes automatically)"
+    else
+      fail "Rebase reported success but stack is not healthy"
+    fi
+  elif echo "$output" | grep -q "Rebase procedure aborted due to merge conflicts"; then
+    # Conflict detected and rebase aborted
+    echo "✅ Conflict correctly detected (even different lines can conflict during rebase)"
+    
+    # Verify repository is in a clean state
+    if [ -d ".git/rebase-apply" ] || [ -d ".git/rebase-merge" ]; then
+      fail "Repository should be in clean state (no rebase in progress), but rebase directories exist"
+    else
+      echo "✅ Repository is in clean state after abort"
+    fi
+  else
+    # Unexpected outcome
+    fail "Rebase did not succeed or abort as expected. Output: $output"
+  fi
+
+  # Clean up
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f no-conflict-test
+  rm -f file.txt
+  echo "✅ Rebase single file different lines conflict test passed"
+}
+
+# Test rebase command with non-overlapping line ranges (no conflict expected)
+# Branch 0 edits lines 1-5, Branch 1 edits lines 1-2, Branch 2 edits lines 4-5
+# When amending branch 1 (lines 1-2), branch 2 (lines 4-5) should rebase without conflict
+# Using branch~N syntax allows git to rebase cleanly when line ranges don't overlap
+function test_rebase_non_overlapping_lines_no_conflict() {
+  echo "Testing rebase command with non-overlapping line ranges (no conflict expected)..."
+
+  # Create a stack with three branches editing different line ranges
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" create non-overlap-test
+  
+  # Branch 0: create file with lines 1-5
+  echo "line 1 from branch-0" > file.txt
+  echo "line 2 from branch-0" >> file.txt
+  echo "line 3" >> file.txt
+  echo "line 4 from branch-0" >> file.txt
+  echo "line 5 from branch-0" >> file.txt
+  git add file.txt
+  git commit -m "create file with lines 1-5 on non-overlap-test-0"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  
+  # Branch 1: edit lines 1-2 only
+  echo "line 1 from branch-1" > file.txt
+  echo "line 2 from branch-1" >> file.txt
+  echo "line 3" >> file.txt
+  echo "line 4 from branch-0" >> file.txt
+  echo "line 5 from branch-0" >> file.txt
+  git add file.txt
+  git commit -m "edit lines 1-2 on non-overlap-test-1"
+  
+  "$SCRIPT_DIR/gitstack.sh" increment
+  
+  # Branch 2: edit lines 4-5 only (non-overlapping with branch-1's lines 1-2)
+  echo "line 1 from branch-1" > file.txt
+  echo "line 2 from branch-1" >> file.txt
+  echo "line 3" >> file.txt
+  echo "line 4 from branch-2" >> file.txt
+  echo "line 5 from branch-2" >> file.txt
+  git add file.txt
+  git commit -m "edit lines 4-5 on non-overlap-test-2"
+
+  # Verify initial state is healthy
+  local status
+  status=$(get_stack_health_status "non-overlap-test")
+  assert_equals "healthy" "$status" "Stack should be healthy initially"
+
+  # Make stack unhealthy by amending branch-1 (modifying lines 1-2 again)
+  git checkout non-overlap-test-1
+  echo "line 1 from branch-1 amended" > file.txt
+  echo "line 2 from branch-1 amended" >> file.txt
+  echo "line 3" >> file.txt
+  echo "line 4 from branch-0" >> file.txt
+  echo "line 5 from branch-0" >> file.txt
+  git add file.txt
+  git commit --amend --no-edit
+  
+  # Verify stack is now unhealthy
+  status=$(get_stack_health_status "non-overlap-test")
+  assert_equals "needs rebase" "$status" "Stack should need rebase after amending"
+
+  # Test rebase command - should succeed without conflicts when using branch~N syntax
+  # This works because git can cleanly apply non-overlapping changes
+  if ! "$SCRIPT_DIR/gitstack.sh" rebase non-overlap-test; then
+    fail "Rebase command should succeed without conflicts when line ranges don't overlap"
+  fi
+
+  # Verify stack is healthy again
+  status=$(get_stack_health_status "non-overlap-test")
+  assert_equals "healthy" "$status" "Stack should be healthy after rebase"
+
+  # Verify that all changes are preserved correctly
+  git checkout non-overlap-test-1
+  if ! grep -q "line 1 from branch-1 amended" file.txt; then
+    fail "Amended line 1 should be preserved in non-overlap-test-1"
+  fi
+  if ! grep -q "line 2 from branch-1 amended" file.txt; then
+    fail "Amended line 2 should be preserved in non-overlap-test-1"
+  fi
+  
+  git checkout non-overlap-test-2
+  # Branch 2 should have the amended lines 1-2 from branch-1, plus its own lines 4-5
+  if ! grep -q "line 1 from branch-1 amended" file.txt; then
+    fail "Amended line 1 from branch-1 should be present in non-overlap-test-2 after rebase"
+  fi
+  if ! grep -q "line 2 from branch-1 amended" file.txt; then
+    fail "Amended line 2 from branch-1 should be present in non-overlap-test-2 after rebase"
+  fi
+  if ! grep -q "line 4 from branch-2" file.txt; then
+    fail "Line 4 from branch-2 should be preserved after rebase"
+  fi
+  if ! grep -q "line 5 from branch-2" file.txt; then
+    fail "Line 5 from branch-2 should be preserved after rebase"
+  fi
+  
+  # Verify the file has all expected lines
+  local line_count
+  line_count=$(wc -l < file.txt | tr -d ' ')
+  if [ "$line_count" -ne 5 ]; then
+    fail "File should have 5 lines after rebase, but has $line_count"
+  fi
+
+  # Clean up
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f non-overlap-test
+  rm -f file.txt
+  echo "✅ Rebase non-overlapping lines no conflict test passed"
+}
+
+# Test rebase command error handling
+function test_rebase_command_errors() {
+  echo "Testing rebase command error handling..."
+
+  # Test error when not on a stack branch and no stack name provided
+  git checkout main
+  git checkout -b not-a-stack-branch
+  output=$("$SCRIPT_DIR/gitstack.sh" rebase 2>&1 || true)
+  if echo "$output" | grep -q "Error: Not currently on a stack branch"; then
+    echo "✅ Rebase command correctly errors on non-stack branch"
+  else
+    fail "Rebase command should error on non-stack branch"
+  fi
+
+  # Test error when stack doesn't exist
+  output=$("$SCRIPT_DIR/gitstack.sh" rebase nonexistent-stack 2>&1 || true)
+  if echo "$output" | grep -q "Error: No branches found in stack"; then
+    echo "✅ Rebase command correctly errors on nonexistent stack"
+  else
+    fail "Rebase command should error on nonexistent stack"
+  fi
+
+  # Clean up
+  git checkout main
+  git branch -D not-a-stack-branch 2>/dev/null || true
+  echo "✅ Rebase command error handling tests passed"
+}
+
+# Test rebase prev command
+function test_rebase_prev_command() {
+  echo "Testing rebase prev command..."
+
+  # Create a stack with 2 branches
+  "$SCRIPT_DIR/gitstack.sh" create rebase-prev-test
+  echo "file0" > file0.txt
+  git add file0.txt
+  git commit -m "commit on rebase-prev-test-0"
+
+  "$SCRIPT_DIR/gitstack.sh" increment
+  echo "file1" > file1.txt
+  git add file1.txt
+  git commit -m "commit on rebase-prev-test-1"
+
+  # Break the stack by amending the first branch
+  git checkout rebase-prev-test-0
+  echo "amended" >> file0.txt
+  git add file0.txt
+  git commit --amend -m "amended on rebase-prev-test-0"
+
+  # Verify stack is unhealthy
+  status=$(get_stack_health_status "rebase-prev-test")
+  assert_equals "needs rebase" "$status" "Stack should need rebase after amending"
+
+  # Test rebase prev command on branch 1
+  git checkout rebase-prev-test-1
+  if ! "$SCRIPT_DIR/gitstack.sh" rebase prev; then
+    fail "Rebase prev command should succeed"
+  fi
+
+  # Verify stack is now healthy
+  status=$(get_stack_health_status "rebase-prev-test")
+  assert_equals "healthy" "$status" "Stack should be healthy after rebase prev"
+
+  # Verify the amended commit is in the chain
+  git checkout rebase-prev-test-1
+  if ! git log --oneline | grep -q "amended"; then
+    fail "Amended commit should be in rebase-prev-test-1 after rebase"
+  fi
+  # Verify the contents of file0
+  if ! grep -q "amended" file0.txt; then
+    fail "File0 should contain 'amended' after rebase"
+  fi
+
+  # Test error when on branch-0 (no previous branch)
+  git checkout rebase-prev-test-0
+  output=$("$SCRIPT_DIR/gitstack.sh" rebase prev 2>&1 || true)
+  if echo "$output" | grep -q "Error: Already at the first branch in stack"; then
+    echo "✅ Rebase prev correctly errors on branch-0"
+  else
+    fail "Rebase prev should error on branch-0"
+  fi
+
+  # Test error when not on a stack branch
+  git checkout main
+  git checkout -b not-a-stack
+  output=$("$SCRIPT_DIR/gitstack.sh" rebase prev 2>&1 || true)
+  if echo "$output" | grep -q "Error: Current branch is not part of a stack"; then
+    echo "✅ Rebase prev correctly errors on non-stack branch"
+  else
+    fail "Rebase prev should error on non-stack branch"
+  fi
+
+  # Clean up
+  git checkout main
+  git branch -D not-a-stack 2>/dev/null || true
+  "$SCRIPT_DIR/gitstack.sh" delete -f rebase-prev-test
+  echo "✅ Rebase prev command tests passed"
+}
+
 # Run all tests
 function run_all_tests() {
   source_gitstack
@@ -638,10 +1135,17 @@ function run_all_tests() {
   test_stack_health
   test_status_command
   test_fix_command
+  test_stack_fix_merge_conflict_bug
   test_stack_navigation
   test_convert_to_stack
   test_push_command
   test_mr_command
+  test_rebase_command
+  test_rebase_single_file_line_conflict
+  test_rebase_single_file_different_lines_conflict
+  test_rebase_non_overlapping_lines_no_conflict
+  test_rebase_command_errors
+  test_rebase_prev_command
 }
 
 # Create a temporary test directory

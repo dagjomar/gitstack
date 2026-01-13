@@ -10,6 +10,7 @@
 #   gitstack.sh list           # <-- interactive stack browser with preview
 #   gitstack.sh status [stack] # <-- show health status of specified stack or all stacks
 #   gitstack.sh fix [stack]    # <-- fix an unhealthy stack by rebasing divergent branches
+#   gitstack.sh rebase [stack|prev] # <-- EXPERIMENTAL: rebase stack using rebase --onto algorithm, or rebase current branch onto previous with "prev"
 #   gitstack.sh prev          # <-- checkout previous branch in stack (e.g. feature-2 -> feature-1)
 #   gitstack.sh next          # <-- checkout next branch in stack (e.g. feature-2 -> feature-3)
 #   gitstack.sh push [stack]  # <-- force-push all branches in a stack to remote
@@ -24,6 +25,7 @@
 #   list        -> Interactive browser for stacks with branch details preview.
 #   status      -> Shows health status of all stacks (or specified stack if provided).
 #   fix         -> Fix an unhealthy stack by rebasing divergent branches.
+#   rebase      -> EXPERIMENTAL: Rebase stack using rebase --onto algorithm (rebases each branch's unique commits). Use "prev" to rebase current branch onto previous branch.
 #   prev        -> Checkout previous branch in stack (e.g. feature-2 -> feature-1).
 #   next        -> Checkout next branch in stack (e.g. feature-2 -> feature-3).
 #   push        -> Force-push all branches in a stack to remote (uses current stack if none specified).
@@ -42,6 +44,7 @@ function usage() {
   echo "  $0 list                  (Interactive stack browser with branch preview)"
   echo "  $0 status [stack]        (Show health status of specified stack or all stacks)"
   echo "  $0 fix [stack]           (Fix an unhealthy stack by rebasing divergent branches)"
+  echo "  $0 rebase [stack|prev]    (EXPERIMENTAL: Rebase stack using rebase --onto algorithm, or rebase current onto previous with 'prev')"
   echo "  $0 prev                  (Checkout previous branch in stack)"
   echo "  $0 next                  (Checkout next branch in stack)"
   echo "  $0 push [stack]          (Force-push all branches in a stack to remote)"
@@ -56,6 +59,7 @@ function usage() {
   echo "  list        Interactive browser for stacks with branch details preview."
   echo "  status      Shows health status of all stacks (or specified stack if provided)."
   echo "  fix         Fix an unhealthy stack by rebasing divergent branches."
+  echo "  rebase      EXPERIMENTAL: Rebase stack using rebase --onto algorithm (rebases each branch's unique commits). Use 'prev' to rebase current branch onto previous branch."
   echo "  prev        Checkout previous branch in stack (e.g. feature-2 -> feature-1)."
   echo "  next        Checkout next branch in stack (e.g. feature-2 -> feature-3)."
   echo "  push        Force-push all branches in a stack to remote. Uses current stack if none specified."
@@ -677,6 +681,14 @@ function fix_stack() {
 
   # Check for potential conflicts
   if ! git merge-base --is-ancestor "$target_branch" "$divergent_branch" 2>/dev/null; then
+    # Check if we're at the branch tip
+    local is_at_tip=false
+    if git rev-parse HEAD >/dev/null 2>&1 && git rev-parse "$divergent_branch" >/dev/null 2>&1; then
+      if [ "$(git rev-parse HEAD)" = "$(git rev-parse "$divergent_branch")" ]; then
+        is_at_tip=true
+      fi
+    fi
+
     # Try a dry-run rebase to check for conflicts
     if git rebase --no-ff --dry-run "$target_branch" "$divergent_branch" &>/dev/null; then
       echo "No conflicts detected, performing automatic rebase..."
@@ -706,69 +718,270 @@ function fix_stack() {
           echo "⚠️  Stack may need additional fixes. Run 'git stack status' to check."
         fi
       else
-        echo "Error: Rebase failed"
-        echo "Aborting rebase..."
+        echo "Conflicts detected during rebase."
+        # Find conflicted files
+        conflicted_files=$(git diff --name-only --diff-filter=U)
+        echo
+        echo "❌ Error: Merge conflict detected while rebasing '$divergent_branch' onto '$target_branch'."
+        if [ -n "$conflicted_files" ]; then
+          echo "The following files have conflicts:"
+          echo "$conflicted_files" | sed 's/^/  - /'
+        else
+          echo "(Could not determine conflicted files)"
+        fi
+        echo
+        echo "The stack fix process has stopped to prevent data loss."
+        echo "Please manually resolve the conflicts by rebasing '$divergent_branch' onto '$target_branch':"
+        echo "  git checkout $divergent_branch"
+        echo "  git rebase $target_branch"
+        echo "Resolve all conflicts, then continue the rebase with 'git rebase --continue'."
+        echo "Once resolved, re-run 'git stack fix $base_name' to continue."
+        # Abort the rebase to leave repo in a clean state
         git rebase --abort
-        
-        # Return to original branch
+        # Return to original branch if different
         if [ "$original_branch" != "$divergent_branch" ]; then
           git checkout "$original_branch"
         fi
         exit 1
       fi
     else
-      echo "Conflicts detected, attempting to skip conflicting commit..."
-      
-      # Save current branch
-      local original_branch="$current_branch"
-      
-      # Checkout the divergent branch
-      if ! git checkout "$divergent_branch"; then
-        echo "Error: Failed to checkout $divergent_branch"
-        exit 1
-      fi
-      
-      # Start the rebase
-      if git rebase "$target_branch" --update-refs; then
-        echo "Successfully rebased $divergent_branch onto $target_branch"
-      else
-        # If rebase stops due to conflict, try to skip the commit
-        if [ -d ".git/rebase-apply" ] || [ -d ".git/rebase-merge" ]; then
-          echo "Attempting to skip conflicting commit..."
-          if git rebase --skip; then
-            echo "Successfully skipped conflicting commit and completed rebase"
+      # If we're at the branch tip, we can try to skip the conflicting commit
+      if [ "$is_at_tip" = true ]; then
+        echo "Conflicts detected, attempting to skip conflicting commit..."
+        
+        # Save current branch
+        local original_branch="$current_branch"
+        
+        # Checkout the divergent branch
+        if ! git checkout "$divergent_branch"; then
+          echo "Error: Failed to checkout $divergent_branch"
+          exit 1
+        fi
+        
+        # Start the rebase
+        if git rebase "$target_branch" --update-refs; then
+          echo "Successfully rebased $divergent_branch onto $target_branch"
+        else
+          # If rebase stops due to conflict, try to skip the commit
+          if [ -d ".git/rebase-apply" ] || [ -d ".git/rebase-merge" ]; then
+            echo "Attempting to skip conflicting commit..."
+            if git rebase --skip; then
+              echo "Successfully skipped conflicting commit and completed rebase"
+            else
+              echo "Failed to skip conflicting commit"
+              git rebase --abort
+              if [ "$original_branch" != "$divergent_branch" ]; then
+                git checkout "$original_branch"
+              fi
+              exit 1
+            fi
           else
-            echo "Failed to skip conflicting commit"
+            echo "Rebase failed in an unexpected way"
             git rebase --abort
             if [ "$original_branch" != "$divergent_branch" ]; then
               git checkout "$original_branch"
             fi
             exit 1
           fi
-        else
-          echo "Rebase failed in an unexpected way"
-          git rebase --abort
-          if [ "$original_branch" != "$divergent_branch" ]; then
-            git checkout "$original_branch"
-          fi
-          exit 1
         fi
-      fi
-      
-      # Return to original branch if different
-      if [ "$original_branch" != "$divergent_branch" ]; then
-        git checkout "$original_branch"
-      fi
-      
-      # Check if the stack is now healthy
-      if check_stack_health "$base_name" >/dev/null 2>&1; then
-        echo "✅ Stack is now healthy!"
+        
+        # Return to original branch if different
+        if [ "$original_branch" != "$divergent_branch" ]; then
+          git checkout "$original_branch"
+        fi
+        
+        # Check if the stack is now healthy
+        if check_stack_health "$base_name" >/dev/null 2>&1; then
+          echo "✅ Stack is now healthy!"
+        else
+          echo "⚠️  Stack may need additional fixes. Run 'git stack status' to check."
+        fi
       else
-        echo "⚠️  Stack may need additional fixes. Run 'git stack status' to check."
+        # For non-tip commits, we need to stop and let the user handle it
+        echo "Conflicts detected during rebase."
+        # Find conflicted files
+        conflicted_files=$(git diff --name-only --diff-filter=U)
+        echo
+        echo "❌ Error: Merge conflict detected while rebasing '$divergent_branch' onto '$target_branch'."
+        if [ -n "$conflicted_files" ]; then
+          echo "The following files have conflicts:"
+          echo "$conflicted_files" | sed 's/^/  - /'
+        else
+          echo "(Could not determine conflicted files)"
+        fi
+        echo
+        echo "The stack fix process has stopped to prevent data loss."
+        echo "Please manually resolve the conflicts by rebasing '$divergent_branch' onto '$target_branch':"
+        echo "  git checkout $divergent_branch"
+        echo "  git rebase $target_branch"
+        echo "Resolve all conflicts, then continue the rebase with 'git rebase --continue'."
+        echo "Once resolved, re-run 'git stack fix $base_name' to continue."
+        exit 1
       fi
     fi
   else
     echo "Error: Unexpected state - branches appear to be in sync"
+    exit 1
+  fi
+}
+
+# Helper function to rebase current branch onto previous branch in stack
+# Returns 0 on success, non-zero on failure
+function rebase_onto_prev() {
+  local current_branch
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+  if ! get_stack_info; then
+    echo "Error: Current branch is not part of a stack (should match '<base>-<number>' pattern)."
+    return 1
+  fi
+
+  # If we're at feature-0, there is no previous branch
+  if [ "$STACK_NUM" -eq 0 ]; then
+    echo "Error: Already at the first branch in stack. No previous branch exists."
+    return 1
+  fi
+
+  local prev_num=$((STACK_NUM - 1))
+  local prev_branch="${STACK_BASE}-${prev_num}"
+
+  # Check if the previous branch exists
+  if ! git rev-parse --verify "$prev_branch" &>/dev/null; then
+    echo "Error: Previous branch '$prev_branch' does not exist."
+    return 1
+  fi
+
+  # Run the rebase command
+  echo "Rebasing $current_branch onto $prev_branch..."
+  if git rebase --onto "$prev_branch" "${current_branch}~1"; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Rebase a stack using the rebase --onto algorithm
+# This is an experimental algorithm that rebases each branch's unique commits onto its parent
+# Usage: rebase_stack [base_name|prev]
+# If no base_name is provided, uses the current branch's stack
+# If "prev" is provided, rebases current branch onto previous branch in stack
+function rebase_stack() {
+  local base_name="$1"
+  local current_branch
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+  # Special case: rebase onto previous branch
+  if [ "$base_name" = "prev" ]; then
+    rebase_onto_prev
+    exit $?
+  fi
+
+  # If no base name provided, try to get it from current branch
+  if [ -z "$base_name" ]; then
+    if ! get_stack_info; then
+      echo "Error: Not currently on a stack branch and no stack name provided."
+      echo "Usage: $0 rebase [stack-name]"
+      exit 1
+    fi
+    base_name="$STACK_BASE"
+  fi
+
+  # Get all branches in the stack, sorted by number
+  local branches
+  branches=$(git branch --list "${base_name}-[0-9]*" --format="%(refname:short)" | sort -V)
+  
+  if [ -z "$branches" ]; then
+    echo "Error: No branches found in stack '$base_name'"
+    exit 1
+  fi
+
+  echo "🔄 Experimental rebase algorithm for stack '$base_name'"
+  echo "This will rebase each branch's unique commits onto its parent using 'rebase --onto'"
+  echo
+
+  # Save current branch to return to it later
+  local original_branch="$current_branch"
+  local success=true
+
+  # Get the first branch in the stack
+  local first_branch
+  first_branch=$(echo "$branches" | head -n1)
+
+  # Checkout the first branch
+  if ! git checkout "$first_branch" &>/dev/null; then
+    echo "❌ Error: Failed to checkout first branch '$first_branch'"
+    exit 1
+  fi
+
+  # Process each branch starting from the second one (branch-1, branch-2, etc.)
+  # We skip branch-0 since it has no previous branch to rebase onto
+  while true; do
+    # Get current branch info to check for next branch
+    if ! get_stack_info; then
+      echo "❌ Error: Lost track of stack branch"
+      success=false
+      break
+    fi
+
+    local next_num=$((STACK_NUM + 1))
+    local next_branch="${STACK_BASE}-${next_num}"
+
+    # Check if the next branch exists
+    if ! git rev-parse --verify "$next_branch" &>/dev/null; then
+      # No more branches, we're done
+      break
+    fi
+
+    # Checkout the next branch
+    if ! git checkout "$next_branch" &>/dev/null; then
+      echo "❌ Error: Failed to checkout next branch '$next_branch'"
+      success=false
+      break
+    fi
+
+    # Rebase this branch onto the previous one
+    if ! rebase_onto_prev; then
+      # Check if rebase failed due to conflicts
+      if [ -d ".git/rebase-apply" ] || [ -d ".git/rebase-merge" ]; then
+        echo
+        echo "⚠️  Rebase procedure aborted due to merge conflicts."
+        echo
+        echo "The experimental rebase algorithm cannot automatically resolve conflicts."
+        echo "Please manually rebase the stack starting from '$next_branch':"
+        echo
+        echo "  1. git checkout $next_branch"
+        echo "  2. git stack rebase prev"
+        echo "  3. Resolve any conflicts, then: git rebase --continue"
+        echo "  4. Continue with remaining branches in the stack as needed"
+        echo
+        echo "Alternatively, you can use 'git stack fix' which may handle some cases differently."
+        
+        # Abort the rebase to leave repository in clean state
+        git rebase --abort &>/dev/null
+      fi
+      
+      success=false
+      break
+    fi
+  done
+
+  # Return to original branch if different
+  if [ "$original_branch" != "$(git rev-parse --abbrev-ref HEAD)" ]; then
+    git checkout "$original_branch" &>/dev/null
+  fi
+
+  if [ "$success" = true ]; then
+    echo
+    echo "✅ Successfully rebased all branches in stack '$base_name'"
+    
+    # Check if the stack is now healthy
+    if check_stack_health "$base_name" >/dev/null 2>&1; then
+      echo "✅ Stack is now healthy!"
+    else
+      echo "⚠️  Stack may still need attention. Run 'git stack status' to check."
+    fi
+  else
+    # Error message already displayed above with specific instructions
     exit 1
   fi
 }
@@ -1059,8 +1272,8 @@ function create_gitlab_mr() {
   fi
 
   # Create MR with glab CLI
-  echo "Running: glab mr create -b $parent_branch $*"
-  if glab mr create -b "$parent_branch" "$@"; then
+  echo "Running: glab mr create -f -w -b $parent_branch $*"
+  if glab mr create -f -w -b "$parent_branch" "$@"; then
     echo "✅ GitLab MR created successfully!"
   else
     echo "❌ Failed to create GitLab MR"
@@ -1096,6 +1309,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       ;;
     fix)
       fix_stack "$@"
+      ;;
+    rebase)
+      rebase_stack "$@"
       ;;
     prev)
       prev_stack
