@@ -684,7 +684,7 @@ function test_stack_fix_merge_conflict_bug() {
 function test_rebase_command() {
   echo "Testing rebase command (experimental rebase --onto algorithm)..."
 
-  # Using 1 commit per branch (as required by the rebase command)
+  # Using 1 commit per branch (multi-commit branches are covered separately)
   git checkout main
   "$SCRIPT_DIR/gitstack.sh" create rebase-test
   
@@ -1126,6 +1126,165 @@ function test_rebase_prev_command() {
   echo "✅ Rebase prev command tests passed"
 }
 
+# Build a stack whose second branch holds three commits, then rewrite the first branch so
+# the second one is left sitting on a stale base.
+# Usage: setup_multi_commit_stack <base> <same-subject|new-subject>
+function setup_multi_commit_stack() {
+  local base="$1"
+  local amend_mode="$2"
+
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" create "$base"
+  echo "base" > "${base}-a.txt"
+  git add "${base}-a.txt"
+  git commit -m "A on ${base}-0"
+
+  "$SCRIPT_DIR/gitstack.sh" increment
+  local letter
+  for letter in B C D; do
+    echo "$letter" > "${base}-${letter}.txt"
+    git add "${base}-${letter}.txt"
+    git commit -m "$letter on ${base}-1"
+  done
+
+  git checkout "${base}-0"
+  echo "amended" >> "${base}-a.txt"
+  git add "${base}-a.txt"
+  if [ "$amend_mode" = "same-subject" ]; then
+    git commit --amend --no-edit
+  else
+    git commit --amend -m "A amended on ${base}-0"
+  fi
+
+  git checkout "${base}-1"
+}
+
+# Assert every commit of a multi-commit branch survived the rebase
+# Usage: assert_multi_commit_survived <base> <message-prefix>
+function assert_multi_commit_survived() {
+  local base="$1"
+  local prefix="$2"
+  local count
+  count=$(git rev-list --count "${base}-0..${base}-1")
+  assert_equals "3" "$count" "$prefix: all three commits should survive"
+
+  local letter
+  for letter in B C D; do
+    if ! git log --format=%s "${base}-0..${base}-1" | grep -Fxq "$letter on ${base}-1"; then
+      fail "$prefix: commit '$letter on ${base}-1' was dropped"
+    fi
+  done
+
+  if ! grep -q "amended" "${base}-a.txt"; then
+    fail "$prefix: amended content from ${base}-0 should be present"
+  fi
+
+  status=$(get_stack_health_status "$base")
+  assert_equals "healthy" "$status" "$prefix: stack should be healthy"
+}
+
+# The documented git alias is '!sh <path>/gitstack.sh', so the script is run by /bin/sh
+# (bash in POSIX mode) rather than its #!/bin/bash shebang. Bash-only syntax such as
+# process substitution is a hard syntax error there, so exercise that invocation path.
+function test_sh_invocation() {
+  echo "Testing invocation via 'sh' (git alias path)..."
+
+  if ! sh -n "$SCRIPT_DIR/gitstack.sh"; then
+    fail "gitstack.sh must parse under /bin/sh"
+  fi
+
+  setup_multi_commit_stack sh-invoke new-subject
+
+  if ! sh "$SCRIPT_DIR/gitstack.sh" rebase prev; then
+    fail "rebase prev should work when the script is run via sh"
+  fi
+
+  assert_multi_commit_survived sh-invoke "sh-invoked rebase prev"
+
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f sh-invoke
+  echo "✅ sh invocation test passed"
+}
+
+# Regression test: a branch with several commits must keep all of them, not just the top one
+function test_rebase_prev_multi_commit() {
+  echo "Testing rebase prev with a multi-commit branch..."
+
+  setup_multi_commit_stack multi-commit new-subject
+
+  if ! "$SCRIPT_DIR/gitstack.sh" rebase prev; then
+    fail "Rebase prev should succeed on a multi-commit branch"
+  fi
+
+  assert_multi_commit_survived multi-commit "Auto-detected rebase prev"
+
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f multi-commit
+  echo "✅ Rebase prev multi-commit test passed"
+}
+
+# An explicit commit count overrides auto-detection
+function test_rebase_prev_explicit_count() {
+  echo "Testing rebase prev with an explicit commit count..."
+
+  setup_multi_commit_stack explicit-count new-subject
+
+  # A count larger than the branch holds must be refused without rewriting anything
+  before=$(git rev-parse explicit-count-1)
+  output=$("$SCRIPT_DIR/gitstack.sh" rebase prev 99 2>&1 || true)
+  if ! echo "$output" | grep -q "does not have 99 commit"; then
+    fail "Rebase prev with too large a count should report an error"
+  fi
+  assert_equals "$before" "$(git rev-parse explicit-count-1)" "Rejected count must not rewrite the branch"
+
+  if ! "$SCRIPT_DIR/gitstack.sh" rebase prev 3; then
+    fail "Rebase prev 3 should succeed"
+  fi
+
+  assert_multi_commit_survived explicit-count "Explicit count rebase prev"
+
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f explicit-count
+  echo "✅ Rebase prev explicit count test passed"
+}
+
+# With the reflog gone, the boundary is recovered by matching commit subjects
+function test_rebase_prev_subject_fallback() {
+  echo "Testing rebase prev subject-matching fallback..."
+
+  setup_multi_commit_stack subject-fallback same-subject
+  git reflog expire --expire=now --expire-unreachable=now refs/heads/subject-fallback-0
+
+  if ! "$SCRIPT_DIR/gitstack.sh" rebase prev; then
+    fail "Rebase prev should fall back to subject matching"
+  fi
+
+  assert_multi_commit_survived subject-fallback "Subject-fallback rebase prev"
+
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f subject-fallback
+  echo "✅ Rebase prev subject fallback test passed"
+}
+
+# No reflog and no matching subject: refuse to guess rather than silently drop commits
+function test_rebase_prev_undetectable() {
+  echo "Testing rebase prev when the boundary cannot be determined..."
+
+  setup_multi_commit_stack undetectable new-subject
+  git reflog expire --expire=now --expire-unreachable=now refs/heads/undetectable-0
+
+  before=$(git rev-parse undetectable-1)
+  output=$("$SCRIPT_DIR/gitstack.sh" rebase prev 2>&1 || true)
+  if ! echo "$output" | grep -q "Could not determine"; then
+    fail "Rebase prev should report that the boundary is undetectable"
+  fi
+  assert_equals "$before" "$(git rev-parse undetectable-1)" "Undetectable boundary must not rewrite the branch"
+
+  git checkout main
+  "$SCRIPT_DIR/gitstack.sh" delete -f undetectable
+  echo "✅ Rebase prev undetectable boundary test passed"
+}
+
 # Run all tests
 function run_all_tests() {
   source_gitstack
@@ -1146,6 +1305,11 @@ function run_all_tests() {
   test_rebase_non_overlapping_lines_no_conflict
   test_rebase_command_errors
   test_rebase_prev_command
+  test_rebase_prev_multi_commit
+  test_rebase_prev_explicit_count
+  test_rebase_prev_subject_fallback
+  test_rebase_prev_undetectable
+  test_sh_invocation
 }
 
 # Create a temporary test directory

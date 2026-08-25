@@ -44,7 +44,7 @@ function usage() {
   echo "  $0 list                  (Interactive stack browser with branch preview)"
   echo "  $0 status [stack]        (Show health status of specified stack or all stacks)"
   echo "  $0 fix [stack]           (Fix an unhealthy stack by rebasing divergent branches)"
-  echo "  $0 rebase [stack|prev]    (EXPERIMENTAL: Rebase stack using rebase --onto algorithm, or rebase current onto previous with 'prev')"
+  echo "  $0 rebase [stack|prev [N]] (EXPERIMENTAL: Rebase stack using rebase --onto algorithm, or rebase current onto previous with 'prev')"
   echo "  $0 prev                  (Checkout previous branch in stack)"
   echo "  $0 next                  (Checkout next branch in stack)"
   echo "  $0 push [stack]          (Force-push all branches in a stack to remote)"
@@ -60,6 +60,7 @@ function usage() {
   echo "  status      Shows health status of all stacks (or specified stack if provided)."
   echo "  fix         Fix an unhealthy stack by rebasing divergent branches."
   echo "  rebase      EXPERIMENTAL: Rebase stack using rebase --onto algorithm (rebases each branch's unique commits). Use 'prev' to rebase current branch onto previous branch."
+  echo "              'prev' auto-detects how many commits are unique to the branch; pass N to replay exactly N commits instead."
   echo "  prev        Checkout previous branch in stack (e.g. feature-2 -> feature-1)."
   echo "  next        Checkout next branch in stack (e.g. feature-2 -> feature-3)."
   echo "  push        Force-push all branches in a stack to remote. Uses current stack if none specified."
@@ -825,9 +826,62 @@ function fix_stack() {
   fi
 }
 
+# Resolve the tip that <prev_branch> had when <current_branch> was stacked on top of it.
+# That commit is the correct <oldbase> for 'git rebase --onto <prev_branch> <oldbase>':
+# everything above it is unique to <current_branch> and must be replayed.
+# Echoes the resolved SHA on stdout. Returns non-zero if it cannot be determined.
+detect_prev_old_base() {
+  local prev_branch="$1"
+  local current_branch="$2"
+
+  # Already stacked correctly - the prev tip is the boundary
+  if git merge-base --is-ancestor "$prev_branch" "$current_branch" 2>/dev/null; then
+    git rev-parse "$prev_branch"
+    return 0
+  fi
+
+  # Primary signal: the previous branch's reflog still holds the tip it had before it was
+  # rewritten. Newest entry that is an ancestor of the current branch is that old tip.
+  # Note: plain 'for' over command substitution, not process substitution - this script is
+  # also invoked as 'sh gitstack.sh' (see the git alias), where '< <(...)' is a syntax error.
+  local entry
+  for entry in $(git rev-list -g "$prev_branch" 2>/dev/null); do
+    if git merge-base --is-ancestor "$entry" "$current_branch" 2>/dev/null; then
+      echo "$entry"
+      return 0
+    fi
+  done
+
+  # Fallback: the rewrite happened elsewhere or the reflog expired. Match commit subjects -
+  # the newest commit in the current branch that reuses a subject from the previous branch
+  # is that branch's old tip.
+  local merge_base
+  merge_base=$(git merge-base "$prev_branch" "$current_branch" 2>/dev/null) || return 1
+  [ -z "$merge_base" ] && return 1
+
+  local prev_subjects
+  prev_subjects=$(git log --format=%s "${merge_base}..${prev_branch}" 2>/dev/null)
+  [ -z "$prev_subjects" ] && return 1
+
+  local sha subject
+  for sha in $(git rev-list "${merge_base}..${current_branch}" 2>/dev/null); do
+    subject=$(git log -1 --format=%s "$sha")
+    if printf '%s\n' "$prev_subjects" | grep -Fxq -- "$subject"; then
+      echo "$sha"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 # Helper function to rebase current branch onto previous branch in stack
+# Usage: rebase_onto_prev [count]
+# Without a count the number of commits unique to the current branch is auto-detected.
+# With a count, exactly <count> commits are replayed (oldbase is HEAD~<count>).
 # Returns 0 on success, non-zero on failure
 function rebase_onto_prev() {
+  local count="$1"
   local current_branch
   current_branch=$(git rev-parse --abbrev-ref HEAD)
 
@@ -851,9 +905,42 @@ function rebase_onto_prev() {
     return 1
   fi
 
-  # Run the rebase command
-  echo "Rebasing $current_branch onto $prev_branch..."
-  if git rebase --onto "$prev_branch" "${current_branch}~1"; then
+  local old_base
+  if [ -n "$count" ]; then
+    if ! [[ "$count" =~ ^[0-9]+$ ]] || [ "$count" -lt 1 ]; then
+      echo "Error: Commit count must be a positive integer, got '$count'."
+      return 1
+    fi
+    if ! old_base=$(git rev-parse --verify "${current_branch}~${count}" 2>/dev/null); then
+      echo "Error: '$current_branch' does not have $count commit(s) to replay."
+      return 1
+    fi
+  else
+    if ! old_base=$(detect_prev_old_base "$prev_branch" "$current_branch"); then
+      echo "Error: Could not determine which commits are unique to '$current_branch'."
+      echo "  No reflog entry or matching commit subject from '$prev_branch' was found in its history."
+      echo
+      echo "Re-run with an explicit commit count, e.g.:"
+      echo "  git stack rebase prev 4"
+      echo
+      echo "Inspect the boundary yourself with:"
+      echo "  git log --oneline ${prev_branch}..HEAD"
+      return 1
+    fi
+  fi
+
+  local pre_rebase_tip
+  pre_rebase_tip=$(git rev-parse "$current_branch")
+
+  local replay_count
+  replay_count=$(git rev-list --count "${old_base}..${current_branch}")
+
+  echo "Rebasing $current_branch onto $prev_branch"
+  echo "  old base: $(git rev-parse --short "$old_base") ($replay_count commit(s) to replay)"
+  git log --oneline "${old_base}..${current_branch}" | sed 's/^/  /'
+  echo "  recover with: git reset --hard $pre_rebase_tip"
+
+  if git rebase --onto "$prev_branch" "$old_base"; then
     return 0
   else
     return 1
@@ -870,9 +957,9 @@ function rebase_stack() {
   local current_branch
   current_branch=$(git rev-parse --abbrev-ref HEAD)
 
-  # Special case: rebase onto previous branch
+  # Special case: rebase onto previous branch, with optional explicit commit count
   if [ "$base_name" = "prev" ]; then
-    rebase_onto_prev
+    rebase_onto_prev "$2"
     exit $?
   fi
 
