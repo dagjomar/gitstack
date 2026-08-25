@@ -1,48 +1,58 @@
 name: Tests
 
 on:
-  push:
-    branches: [ main ]
   pull_request:
     branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [ main ]
+
+# Cancel older runs on the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege token even if repo defaults change later
+permissions:
+  contents: read
+  actions: read
+  checks: read
 
 jobs:
   test:
+    # Skip for draft PRs
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Verify repository structure
-      run: |
-        echo "Current directory: $(pwd)"
-        echo "Repository contents:"
-        ls -la
-        echo "Bin directory contents:"
-        ls -la bin/
-        
-    - name: Make test script executable
-      run: chmod +x bin/gitstack_test.sh
-      
-    - name: Run gitstack tests
-      working-directory: .
-      run: |
-        echo "🧪 Running gitstack tests..."
-        echo "Working directory: $(pwd)"
-        echo "Running from: $(realpath bin/gitstack_test.sh)"
-        if ./bin/gitstack_test.sh; then
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # prevents pushes with GITHUB_TOKEN
+
+      - name: Verify repository structure
+        run: |
+          echo "pwd=$(pwd)"
+          ls -la
+          ls -la bin/ || true
+
+      - name: Make test script executable
+        run: chmod +x bin/gitstack_test.sh
+
+      - name: Run gitstack tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "🧪 Running gitstack tests..."
+          ./bin/gitstack_test.sh
           echo "✅ All tests passed!"
-        else
-          echo "❌ Tests failed!"
-          exit 1
-        fi
-        
-    - name: Test summary
-      if: always()
-      run: |
-        if [ $? -eq 0 ]; then
-          echo "🎉 gitstack is working correctly!"
-        else
-          echo "🚨 gitstack has issues that need attention"
-        fi
+
+      - name: Test summary
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "🎉 gitstack is working correctly!"
+          else
+            echo "🚨 gitstack has issues that need attention"
+          fi
